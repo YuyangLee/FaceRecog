@@ -1,0 +1,16 @@
+tag: 'baseline'
+
+# Data
+train_data_path:  'data/train/'
+valid_data_path:  'data/valid/'
+test_data_path:   'data/test/'
+checkpoint_dir: 'data/ckpt/'
+
+# Training
+use_gpu: True
+use_cpu: 1
+
+epochs: 120
+learning_rate: 1e-4 
+
+batch_size: 32
