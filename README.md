@@ -1,6 +1,6 @@
 # RecogNet
 
-This is Yuyang's repository for his course project in PRML (THU Fall 2022).
+This is [Yuyang](https://yuyangli.com)'s repository for his course project in PRML (THU Fall 2022).
 
 ## Environment Setup
 
@@ -56,19 +56,32 @@ Download the [dataset zip file](https://assets.aidenli.net/dev/thu-prml-22/datas
 ```
 data/
 ├─test_pair/
+│  ├─bb.json
 │  ├─0/
 │  └─...
 └─training_set/
+│  ├─bb.json
    ├─Alice/
    ├─Bob/
    └─...
 ```
 
-Then pre-process the image:
+### Image Pre-processing
+
+To help training, we first pre-process the image:
+
+- rotate the image, so that the eyes are on a horizontal line.
+- detect the face and mark the bounding box
+
+Pre-process the image:
 
 ```shell
 python data-proc.py --dataset_dir data/
 ```
+
+This will generate 2 bounding boxes for each image: one for the untransformed version, and another one for the transformed version. Parameters for the  affine tranformation as well as the bounding boxes are in `data/training_set/bb.json` or `data/test_pair/bb.json`.
+
+> On our provided images, at least one face is (will be) detectable with our code. If you want to use your images, you may need to check that there is no failure cases, or you should optimize the detection code or manually annotate the data.
 
 ## Train the model
 

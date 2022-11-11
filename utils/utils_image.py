@@ -57,7 +57,7 @@ def face_bb(img, detector=None, upsample_time=1, multi_strat='center', viz_multi
     if detector is None:
         detector = dlib.get_frontal_face_detector()
         
-    bounding_box = None
+    d = None
     dets = detector(img, upsample_time)
     # dets, scores, idxs = detector.run(img, 1, -1)
     print("Number of faces detected: {}".format(len(dets)))

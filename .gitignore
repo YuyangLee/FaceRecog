@@ -3,7 +3,8 @@
 archive/
 ckpt/
 
-data/test_pair/
-data/training_set/
+data/test_pair/*
+data/training_set/*
+!bb.json
 
 thirdparty/

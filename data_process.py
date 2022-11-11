@@ -14,7 +14,6 @@ import dlib
 import matplotlib
 import numpy as np
 from genericpath import isdir
-
 from utils.utils_image import face_bb, face_landmark, affine_2d, landmark_idxs
 
 training_dir = "data/training_set"
@@ -33,14 +32,20 @@ for directory in [ test_dir, training_dir ]:
         if not isdir(person_dir):
             continue
         image_list = os.listdir(person_dir)
+        os.makedirs(os.path.join(person_dir, "aligned"), exist_ok=True)
         for image in image_list:
-            image_path = os.path.join(directory, person, image)
+            image_path = os.path.join(person_dir, image)
+            if isdir(image_path):
+                continue
             print(f"Processing {image_path}")
             
             img = cv2.imread(image_path, cv2.IMREAD_COLOR)  # RGB
             rows, cols, ch = img.shape
             
-            rect = face_bb(img, detector, multi_strat='center', viz_multi=False)
+            for upsample_times in [1, 2, 4]:
+                rect = face_bb(img, detector, upsample_times, multi_strat='center', viz_multi=False)
+                if rect is not None:
+                    break
             if rect is None:
                 failure_images.append(image_path)
                 bounding_boxes[f'{person}/{image}'] = None
@@ -54,27 +59,23 @@ for directory in [ test_dir, training_dir ]:
                 affine = affine_2d(orient=orient_angle)
                 img_affine = cv2.warpAffine(img, affine, (cols, rows), flags=cv2.INTER_LINEAR)
                 
+                cv2.imwrite(os.path.join(person_dir, "aligned", image), img_affine)
+                
                 # pickle.dumpos.path.join(directory, person, f"{os.path.splitext(image)}_bb.pkl")
                 bounding_boxes[f'{person}/{image}'] = {
-                    'rect_unrot': [rect.left(), rect.top(), rect.right(), rect.bottom()],
-                    'orient_angle': orient_angle,
-                    'affine': affine
+                    'rect_unaligned': [rect.left(), rect.top(), rect.right(), rect.bottom()],
+                    'orient_angle': orient_angle.tolist(),
+                    'affine': affine.tolist()
                 }
-                rect = face_bb(img_affine, detector, multi_strat='center', viz_multi=False)
+                for upsample_times in [1, 2, 4]:
+                    rect = face_bb(img_affine, detector, upsample_time=2, multi_strat='center', viz_multi=False)
+                    if rect is not None:
+                        break
                 if rect is None:
                     failure_images.append(image_path)
                 else:
-                    bounding_boxes[f'{person}/{image}']['rect'] = [rect.left(), rect.top(), rect.right(), rect.bottom()]
+                    bounding_boxes[f'{person}/{image}']['rect_aligned'] = [rect.left(), rect.top(), rect.right(), rect.bottom()]
                 
-
-    for image_path in failure_images:
-        print(f"Re-processing {image_path}")
-        for upsample_times in [2, 4]:
-            rect = face_bb(image_path, detector, upsample_times, multi_strat='center', viz_multi=False)
-            if rect is not None:
-                failure_images.remove(image_path)
-                bounding_boxes[f'{person}/{image}'] = [rect.left(), rect.top(), rect.right(), rect.bottom()]
-                break
-    bounding_boxes['0_failure'] = failure_images
+    bounding_boxes['failure'] = failure_images
     json.dump(bounding_boxes, open(os.path.join(directory, "bb.json"), 'w'))
     
