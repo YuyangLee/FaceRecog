@@ -6,6 +6,9 @@ valid_data_path:  'data/valid/'
 test_data_path:   'data/test/'
 checkpoint_dir: 'data/ckpt/'
 
+image_h: 250
+image_w: 250
+
 # Training
 use_gpu: True
 use_cpu: 1

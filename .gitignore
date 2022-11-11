@@ -2,5 +2,8 @@
 
 archive/
 ckpt/
-data/
+
+data/test_pair/
+data/training_set/
+
 thirdparty/
