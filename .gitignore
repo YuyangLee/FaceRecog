@@ -1,4 +1,6 @@
+.vscode/
+
 archive/
 ckpt/
 data/
-.vscode/
+thirdparty/
