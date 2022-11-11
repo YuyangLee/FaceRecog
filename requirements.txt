@@ -1,3 +1,5 @@
 numpy
 face_recognition
 imutils
+opencv-python
+imutils
