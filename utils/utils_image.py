@@ -10,9 +10,26 @@ import sys
 import dlib
 import numpy as np
 
+landmark_idxs = {
+	"mouth": [48, 54],
+	"right_eye": [36, 39],
+	"left_eye": [42, 45],
+	"nose": [31, 35],
+}
+
+def face_landmark(image_path, predictor, ):
+    """Locate the face landmark in an image.
+
+    Args:
+        image_path (_type_): _description_
+        predictor (_type_, optional): _description_. Defaults to None.
+    """
+    predictor = dlib.shape_predictor()
+    shape=predictor(photo,detect[0])
+
 def face_bb(image_path, detector=None, upsample_time=1, multi_strat='center', viz_multi=False):
     """
-    Find the face bounding box in the image
+    Find the face bounding box in an image
 
     Args:
         image_path: str
