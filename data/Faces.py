@@ -18,18 +18,18 @@ from torch.utils.data import DataLoader, Dataset
 
 
 class Faces(Dataset):
-    def __init__(self, data_dir, train=False, device='cuda'):
+    def __init__(self, base_dir, mode='train', device='cuda'):
         super().__init__()
         
-        self.data_dir = data_dir
         self.device = device
         
-        if train:
+        if mode == 'train':
             self.__getitem__ = self.getitem_train
-            self._load_train(data_dir)
+        elif mode == 'valid':
+            self.__getitem__ = self.getitem_test
         else:
             self.__getitem__ = self.getitem_test
-            self._load_test(data_dir)
+        self._load_test(base_dir)
             
         
     def __len__(self, index):
@@ -41,8 +41,10 @@ class Faces(Dataset):
     def getitem_test(self, index):
         pass
 
-    def _load_train(self, data_dir):
-        pass
-    
-    def _load_test(self, data_dir):
-        pass
+    def _load(self, base_dir, mode='train'):
+        if mode == 'train' or mode == 'valid':
+            self.base_dir = os.path.join(base_dir, "training_set")
+            names = json.load(open(os.path.join(self.base_dir, "split.json"), 'r'))[mode]
+        elif mode == 'test':
+            self.base_dir = os.path.join(base_dir, "test_pair")
+            names = os.listdir(os.path.join(self.base_dir, "test_pair"))
