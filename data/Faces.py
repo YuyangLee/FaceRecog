@@ -48,3 +48,12 @@ class Faces(Dataset):
         elif mode == 'test':
             self.base_dir = os.path.join(base_dir, "test_pair")
             names = os.listdir(os.path.join(self.base_dir, "test_pair"))
+            
+        for name, metadata in names.items():
+            aligned_img_files = metadata['pics_aligned']
+            for aligned_img_file in aligned_img_files:
+                rectangle = metadata['align_params'][aligned_img_file]['rect_aligned']
+                aligned_file_path = os.path.join(self.base_dir, name, "aligned", aligned_img_file)
+                
+            
+            

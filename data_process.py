@@ -40,6 +40,8 @@ for directory in [ test_dir, training_dir ]:
     failure_images = []
     metadata = {}
     person_list = os.listdir(directory)
+    manual_data = json.load(open("data/manual.json", 'r'))
+    
     for person in person_list:
         person_dir = os.path.join(directory, person)
         if not os.path.isdir(person_dir):
@@ -62,8 +64,8 @@ for directory in [ test_dir, training_dir ]:
             'paths_aligned':    [ ],
             "pics_all": image_list,
             # "pics_unaligned": { },
-            "pics_aligned": { },
-            "align_params": []
+            "pics_aligned": [ ],
+            "align_params": { }
         }
         
         for image in image_list:
@@ -81,42 +83,49 @@ for directory in [ test_dir, training_dir ]:
                 if rect is not None:
                     break
             if rect is None:
-                failure_images.append(image_path)
-                flag = False
-            else:
-                metadata[person]['num_pics_unaligned'] += 1
-                landmark = face_landmark(img, predictor=predictor, rect=rect)
-                
-                left_eye = np.asarray([ landmark[i] for i in landmark_idxs['left_eye'] ]).mean(axis=0)
-                right_eye = np.asarray([ landmark[i] for i in landmark_idxs['right_eye'] ]).mean(axis=0)
-                orient_angle = - np.arctan((right_eye[1] - left_eye[1]) / (right_eye[0] - left_eye[0])) / np.pi * 180
-                
-                affine = affine_2d(orient=orient_angle)
-                img_affine = cv2.warpAffine(img, affine, (cols, rows), flags=cv2.INTER_LINEAR)
-                
-                cv2.imwrite(os.path.join(person_dir, "aligned", image), img_affine)
-                
-                # pickle.dumpos.path.join(directory, person, f"{os.path.splitext(image)}_bb.pkl")
-                metadata[person]['align_params'].append(
-                    {
-                        'rect_unaligned': [rect.left(), rect.top(), rect.right(), rect.bottom()],
-                        'orient_angle': orient_angle.tolist(),
-                        'affine': affine.tolist()
-                    }
-                )
-                for upsample_times in [1, 2, 4]:
-                    rect = face_bb(img_affine, detector, upsample_time=2, multi_strat='center', viz_multi=False)
-                    if rect is not None:
-                        break
-                if rect is None:
+                if image_path in manual_data:
+                    rect = manual_data[image_path]['rect_unaligned']
+                    x1, y1, x2, y2 = rect
+                    rect = dlib.rectangle(x1, y1, x2, y2)
+                else:
                     failure_images.append(image_path)
                     flag = False
+                    continue
+
+            metadata[person]['num_pics_unaligned'] += 1
+            landmark = face_landmark(img, predictor=predictor, rect=rect)
+            
+            left_eye = np.asarray([ landmark[i] for i in landmark_idxs['left_eye'] ]).mean(axis=0)
+            right_eye = np.asarray([ landmark[i] for i in landmark_idxs['right_eye'] ]).mean(axis=0)
+            orient_angle = - np.arctan((right_eye[1] - left_eye[1]) / (right_eye[0] - left_eye[0])) / np.pi * 180
+            
+            affine = affine_2d(orient=orient_angle)
+            img_affine = cv2.warpAffine(img, affine, (cols, rows), flags=cv2.INTER_LINEAR)
+            
+            cv2.imwrite(os.path.join(person_dir, "aligned", image), img_affine)
+            
+            # pickle.dumpos.path.join(directory, person, f"{os.path.splitext(image)}_bb.pkl")
+            metadata[person]['align_params'][image] = {
+                'rect_unaligned': [rect.left(), rect.top(), rect.right(), rect.bottom()],
+                'orient_angle': orient_angle.tolist(),
+                'affine': affine.tolist()
+            }
+            for upsample_times in [1, 2, 4]:
+                rect = face_bb(img_affine, detector, upsample_time=2, multi_strat='center', viz_multi=False)
+                if rect is not None:
+                    break
+            if rect is None:
+                if image_path in manual_data:
+                    rect = manual_data[image_path]['rect_aligned']
+                    x1, y1, x2, y2 = rect
+                    rect = dlib.rectangle(x1, y1, x2, y2)
                 else:
-                    metadata[f'{person}/{image}']['rect_aligned'] = [rect.left(), rect.top(), rect.right(), rect.bottom()]
-                    
-            if not flag:
-                metadata[person]['pics_aligned'].append(image)
-                metadata[person]['paths_aligned'].append(image_path)
+                    failure_images.append(image_path)
+                    flag = False
+                    continue
+            metadata[person]['align_params'][image]['rect_aligned'] = [rect.left(), rect.top(), rect.right(), rect.bottom()]
+            metadata[person]['pics_aligned'].append(image)
+            metadata[person]['paths_aligned'].append(image_path)
                 
     metadata['failure'] = failure_images
     json.dump(metadata, open(os.path.join(directory, "bb.json"), 'w'))

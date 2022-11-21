@@ -1,0 +1,22 @@
+{
+    "data/test_pair/84/B.jpg": {
+        "rect_unaligned": [ 88, 88, 172, 172 ],
+        "orient_angle": -7.2,
+        "rect_aligned": [ 74, 77, 157, 160 ]
+    },
+    "data/test_pair/574/A.jpg": {
+        "rect_unaligned": [ 84, 94, 179, 188 ],
+        "orient_angle": -7.2,
+        "rect_aligned": [ 81, 91, 171, 181 ]
+    },
+    "data/test_pair/67/A.jpg": {
+        "rect_unaligned": [ 85, 97, 162, 174 ],
+        "orient_angle": -3.6,
+        "rect_aligned": [ 77, 90, 155, 168 ]
+    },
+    "data/test_pair/479/A.jpg": {
+        "rect_unaligned": [ 84, 89, 167, 172 ],
+        "orient_angle": -7.8,
+        "rect_aligned": [ 76, 81, 155, 160 ]
+    }
+}
