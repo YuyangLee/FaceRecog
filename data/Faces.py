@@ -18,7 +18,6 @@ from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 import cv2
 
-@torch.no_grad
 class Faces(Dataset):
     def __init__(self, base_dir, batch_size=64, mode='train', lazy=False, preload_device='cpu', device='cuda'):
         super().__init__()
@@ -42,17 +41,19 @@ class Faces(Dataset):
             self.__len__ = lambda: len(self.idx_to_name)
         self._load_test(base_dir)
         
+    @torch.no_grad
     def train_getitem(self, index):
-        image_0 = self.get_image(index).unsqueeze(0)
+        image_0 = self.get_image(index).clone().to(self.devicee)
         triplet, labels = self.get_triplet(index)
-        triplet_images = [ self.get_image(j) for j in triplet ]
+        triplet_images = [ self.get_image(j).clone().to(self.devicee) for j in triplet ]
         triplet_images = torch.stack(triplet_images, dim=0)
         
         return image_0, triplet_images, labels
     
+    @torch.no_grad
     def test_getitem(self, index):
-        image_0 = self.get_images(2 * index    )
-        image_1 = self.get_images(2 * index + 1)
+        image_0 = self.get_images(2 * index    ).clone().to(self.devicee)
+        image_1 = self.get_images(2 * index + 1).clone().to(self.devicee)
         return image_0, image_1
     
     def get_triplet(self, index):
@@ -70,12 +71,13 @@ class Faces(Dataset):
         i_name, i_file = self.all_data[index]
         path = self.aligned_images_paths[i_name][i_file]
         img = torch.tensor(cv2.imread(path, cv2.IMREAD_COLOR)).float().to(self.preload_device)
-        rect_x1, rect_y1, rect_x2, rect_y2 = self.aligned_image_rect[i_name][1]:self.aligned_image_rect[i_name][3], self.aligned_image_rect[i_name][0]:self.aligned_image_rect[i_name][2]
+        rect_x1, rect_y1, rect_x2, rect_y2 = self.aligned_image_rect[i_name][1], self.aligned_image_rect[i_name][3], self.aligned_image_rect[i_name][0], self.aligned_image_rect[i_name][2]
         # TODO: Pad the image for indicing
         # TODO: Compute the expanded rectangle
         # TODO: Crop with the expanded rectangle
         return img
 
+    @torch.no_grad
     def _load(self, base_dir, mode='train'):
         if mode == 'train' or mode == 'valid':
             self.base_dir = os.path.join(base_dir, "training_set")
