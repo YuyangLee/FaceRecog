@@ -2,11 +2,14 @@ import argparse
 import json
 import os
 from datetime import datetime
+import random
 
+import numpy as np
 import tensorboardX
 import torch
 from torch.utils.data import DataLoader
 from torchvision.transforms import RandomHorizontalFlip, RandomRotation
+from torchvision.utils import save_image
 from tqdm import tqdm, trange
 
 from data.Faces import Faces
@@ -20,19 +23,19 @@ def get_args():
     parser.add_argument("--batch_size", default=128, type=int)
     parser.add_argument("--epochs", default=100, type=int)
 
-    parser.add_argument("--H", default=128, type=int)
-    parser.add_argument("--W", default=128, type=int)
+    parser.add_argument("--H", default=64, type=int)
+    parser.add_argument("--W", default=64, type=int)
     
     # Dataset
     parser.add_argument("--lazy_load", action="store_true")
     parser.add_argument("--num_workers", default=0, type=int)
     parser.add_argument("--train_ratio", default=0.8, type=float)
     
-    parser.add_argument("--margin", default=2.0, type=float)
+    parser.add_argument("--margin", default=0.15, type=float)
     parser.add_argument("--learnable_margin", action="store_true")
     parser.add_argument("--t_ema", action="store_true")
 
-    parser.add_argument("--backbone", default="resnet_101", type=str)
+    parser.add_argument("--backbone", default="resnet_50", type=str)
     parser.add_argument("--loss", default="triplet", type=str)
 
     parser.add_argument("--checkpoint", default=None, type=str)
@@ -41,23 +44,30 @@ def get_args():
     parser.add_argument("--test", action="store_true")
     parser.add_argument("--device", default="cuda", type=str)
     
+    parser.add_argument("--seed", default=42, type=int)
+    
     args = parser.parse_args()
     return args
 
-# @torch.jit.script
-def metric(anchor, positive, negative, threshold=0.1):
+def set_seed(seed):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+
+def metric(anchor, positive, negative, threshold):
     dist_ap = torch.norm(anchor - positive, dim=-1)
     dist_an = torch.norm(anchor - negative, dim=-1)
     tn = (dist_ap > threshold).float().mean().item()
     fp = (dist_an < threshold).float().mean().item()
-    acc = tn + fp / 2
+    acc = 1 - (tn + fp) / 2
     return tn, fp, acc
 
-# @torch.jit.script
-def triplet_loss(anchor, positive, negative, margin=0.2):
+@torch.jit.script
+def triplet_loss(anchor, positive, negative, margin):
     dist_ap = torch.norm(anchor - positive, dim=-1)
     dist_an = torch.norm(anchor - negative, dim=-1)
-    loss = torch.mean(torch.clamp(dist_ap - dist_an + margin, min=0.0))
+    loss = torch.relu(dist_ap - dist_an + margin)
     return loss
 
 def train(args, basedir, model, train_dataset, valid_dataset, writer):
@@ -76,12 +86,14 @@ def train(args, basedir, model, train_dataset, valid_dataset, writer):
     flipper = RandomHorizontalFlip(p=1.0)
     rotater = RandomRotation(degrees=10)
     
+    step = 0
     for epoch in range(args.epochs):
         tqdm.write(f"Epoch: { epoch }")
         model.train()
         for i_batch, data in enumerate(tqdm(train_dl)):
             optimizer.zero_grad()
             faces_anc, faces_pos, faces_neg, idx_anc, idx_pos, idx_neg = data
+            faces_anc, faces_pos, faces_neg = faces_anc.permute(0, 3, 1, 2), faces_pos.permute(0, 3, 1, 2), faces_neg.permute(0, 3, 1, 2)
             
             pos_flip = (idx_anc == idx_pos)
             pos_flip = torch.rand(pos_flip.shape, device=args.device) < 0.5 + pos_flip
@@ -91,19 +103,31 @@ def train(args, basedir, model, train_dataset, valid_dataset, writer):
             neg_flip_idx = torch.where(neg_flip)[0]
             
             faces_pos[pos_flip_idx] = flipper(faces_pos[pos_flip_idx])
-            faces_neg[neg_flip_idx] = flipper(faces_neg)[neg_flip_idx]
+            faces_neg[neg_flip_idx] = flipper(faces_neg[neg_flip_idx])
             
             faces_anc = rotater(faces_anc)
             faces_pos = rotater(faces_pos)
             faces_neg = rotater(faces_neg)
             
+            faces_anc, faces_pos, faces_neg = faces_anc.permute(0, 2, 3, 1), faces_pos.permute(0, 2, 3, 1), faces_neg.permute(0, 2, 3, 1)
+            
+            faces_anc = faces_anc + torch.normal(mean=0.0, std=0.05, size=faces_anc.shape, device=args.device)
+            faces_neg = faces_neg + torch.normal(mean=0.0, std=0.05, size=faces_neg.shape, device=args.device)
+            faces_pos = faces_pos + torch.normal(mean=0.0, std=0.05, size=faces_pos.shape, device=args.device)
+            
+            faces_anc, faces_pos, faces_anc = torch.clamp(faces_anc, 0, 1), torch.clamp(faces_pos, 0, 1), torch.clamp(faces_neg, 0, 1)
+            
             ft_anc = model(faces_anc)
             ft_pos = model(faces_pos)
             ft_neg = model(faces_neg)
             
-            loss = triplet_loss(ft_anc, ft_pos, ft_neg, margin=margin)
+            loss_t = triplet_loss(ft_anc, ft_pos, ft_neg, margin=margin)
+            loss_r = (torch.norm(ft_anc, dim=-1) + torch.norm(ft_pos, dim=-1) + torch.norm(ft_neg, dim=-1) - 3).pow(2).mean()
+            
+            loss = (10 * loss_t + 1 * loss_r).mean()
             loss.backward()
             optimizer.step()
+            step += 1
             
             with torch.no_grad():
                 if i_batch % 10 == 0:
@@ -115,25 +139,26 @@ def train(args, basedir, model, train_dataset, valid_dataset, writer):
                         threshold = t_ema.value()
                     
                     tn, fp, acc = metric(ft_anc, ft_pos, ft_neg, threshold=threshold)
-                    writer.add_scalar("train/epoch", epoch, i_batch)
+                    writer.add_scalar("train/epoch", epoch, step)
                     
-                    writer.add_scalar("train/t_neg", tn, i_batch)
-                    writer.add_scalar("train/f_pos", fp, i_batch)
-                    writer.add_scalar("train/accuracy", acc, i_batch)
-                    writer.add_scalar("train/triplet_loss", loss.item(), i_batch)  
+                    writer.add_scalar("train/t_neg", tn, step)
+                    writer.add_scalar("train/f_pos", fp, step)
+                    writer.add_scalar("train/accuracy", acc, step)
+                    writer.add_scalar("train/triplet_loss", loss.item(), step)  
                       
-                    writer.add_scalar("hparam/threshold", threshold, i_batch)
-                    writer.add_scalar("hparam/margin", margin, i_batch)
+                    writer.add_scalar("hparam/threshold", threshold, step)
+                    writer.add_scalar("hparam/margin", margin, step)
                     
-                    writer.add_image("train/image/anc", faces_anc[0].detach().cpu().numpy().transpose((2, 0, 1)), i_batch)
-                    writer.add_image("train/image/pos", faces_pos[0].detach().cpu().numpy().transpose((2, 0, 1)), i_batch)
-                    writer.add_image("train/image/neg", faces_neg[0].detach().cpu().numpy().transpose((2, 0, 1)), i_batch)
+                    writer.add_image("train/image/anc", faces_anc[0].detach().cpu().numpy().transpose((2, 0, 1)), step)
+                    writer.add_image("train/image/pos", faces_pos[0].detach().cpu().numpy().transpose((2, 0, 1)), step)
+                    writer.add_image("train/image/neg", faces_neg[0].detach().cpu().numpy().transpose((2, 0, 1)), step)
                     
                     tqdm.write(f"\tLoss: {loss.item():.4f}, Margin: {margin:.4f}, Threshold: {threshold:.4f}, Accuracy: {acc:.4f}, tn: {tn:.4f}, fp: {fp:.4f}")
                 
-        with torch.no_grad():
             
+        with torch.no_grad():
             model.eval()
+            tns, fps, accs = [], [], []
             for i_batch, data in enumerate(tqdm(valid_dl)):
                 faces_anc, faces_pos, faces_neg, idx_anc, idx_pos, idx_neg = data
                 
@@ -142,9 +167,14 @@ def train(args, basedir, model, train_dataset, valid_dataset, writer):
                 ft_neg = model(faces_neg)
                 
                 tn, fp, acc = metric(ft_anc, ft_pos, ft_neg, threshold=threshold)
-                writer.add_scalar("valid/t_neg", tn, i_batch)
-                writer.add_scalar("valid/f_pos", fp, i_batch)
-                writer.add_scalar("valid/accuracy", acc, i_batch)
+                
+                tns.append(tn)
+                fps.append(fp)
+                accs.append(acc)
+                
+            writer.add_scalar("valid/t_neg", np.array(tns).mean(), step)
+            writer.add_scalar("valid/f_pos", np.array(fps).mean(), step)
+            writer.add_scalar("valid/accuracy", np.array(accs).mean(), step)
         
         with torch.no_grad():
             if epoch % 10 == 0:
@@ -155,6 +185,7 @@ def train(args, basedir, model, train_dataset, valid_dataset, writer):
                     "model": model.state_dict(),
                     "optimizer": optimizer.state_dict(),
                 }, os.path.join(basedir, f"{ args.backbone }_{ epoch }.pth"))
+        
 
 @torch.no_grad() 
 def test(args, basedir, model, test_ds, writer):
@@ -194,6 +225,8 @@ def load_ckpt(path, model, optimizer=None):
 
 if __name__ == '__main__':
     args = get_args()
+    
+    set_seed(args.seed)
     
     basedir = "results/" + datetime.now().strftime("%Y-%m-%d/%H-%M-%S") + f"_{ args.tag }"
     os.makedirs(basedir, exist_ok=True)

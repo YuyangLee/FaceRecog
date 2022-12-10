@@ -18,6 +18,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 from torchvision.transforms import Resize
+from torchvision.utils import save_image
 from tqdm import tqdm
 import cv2
 
@@ -74,8 +75,11 @@ class Faces(Dataset):
         return pos_idx, neg_idx
             
     def _crop_and_resize(self, img, rect_x1, rect_y1, rect_x2, rect_y2):
+        # save_image(torch.tensor(img).permute(2, 0, 1), 'debug/img.png')
         img = img[rect_y1:rect_y2, rect_x1:rect_x2]
+        # save_image(torch.tensor(img).permute(2, 0, 1), 'debug/img_cropped.png')
         img = self.resizer(img.permute(2, 0, 1)).permute(1, 2, 0)
+        # save_image(torch.tensor(img).permute(2, 0, 1), 'debug/img_resized.png')
         return img
     
     def train_get_image_pre(self, index):
@@ -83,8 +87,8 @@ class Faces(Dataset):
     
     def train_get_image_lazy(self, index, device='cuda'):
         path = self.aligned_images_paths[index]
-        img = torch.tensor(cv2.imread(path, cv2.IMREAD_COLOR)).float().to(device)
-        rect_x1, rect_y1, rect_x2, rect_y2 = self.aligned_image_rect[index][1], self.aligned_image_rect[index][0], self.aligned_image_rect[index][3], self.aligned_image_rect[index][2]
+        img = torch.tensor(cv2.imread(path, cv2.IMREAD_COLOR)).float().to(device)[:, :, [2, 1, 0]] / 256 # BGR to RGB and scale to [0, 1]
+        rect_x1, rect_y1, rect_x2, rect_y2 = self.aligned_image_rect[index][0], self.aligned_image_rect[index][1], self.aligned_image_rect[index][2], self.aligned_image_rect[index][3]
         img = self._crop_and_resize(img, rect_x1, rect_y1, rect_x2, rect_y2)
         return img
 

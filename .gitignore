@@ -8,4 +8,5 @@ data/training_set/*
 !bb.json
 
 thirdparty/
-results
+results/
+debug/
