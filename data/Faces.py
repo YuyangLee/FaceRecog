@@ -15,17 +15,20 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
+from trochvision.transforms import Resize
 from tqdm import tqdm
 import cv2
 
 class Faces(Dataset):
-    def __init__(self, base_dir, batch_size=64, mode='train', lazy=False, preload_device='cpu', device='cuda'):
+    def __init__(self, base_dir, batch_size=64, H=128, W=128, mode='train', lazy=False, preload_device='cpu', device='cuda'):
         super().__init__()
         
         self.lazy = lazy
         
         # The amount of positive/negative pairs in a batch. Use batch_size=1 in data_loader
         self.batch_size = batch_size
+        
+        self.H, self.W = H, W
         
         self.preload_device = preload_device
         self.device = device
@@ -34,7 +37,7 @@ class Faces(Dataset):
             self.__getitem__ = self.train_getitem
             self.__len__ = lambda: len(self.all_data)
         elif mode == 'valid':
-            self.__getitem__ = self.test_getitem
+            self.__getitem__ = self.train_getitem
             self.__len__ = lambda: len(self.all_data)
         else:
             self.__getitem__ = self.test_getitem
@@ -75,6 +78,7 @@ class Faces(Dataset):
         # TODO: Pad the image for indicing
         # TODO: Compute the expanded rectangle
         # TODO: Crop with the expanded rectangle
+        # TODO: Resize image to H x W
         return img
 
     @torch.no_grad

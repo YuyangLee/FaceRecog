@@ -4,7 +4,7 @@ import torch.nn as nn
 from models.ResNet import get_resnet_50, get_resnet_101, get_resnet_152
 
 class RecogNet(nn.Module):
-    def __init__(self, image_h, image_w, len_embedding=256, backbone='resnet_50'):
+    def __init__(self, image_h, image_w, len_embedding=256, backbone='resnet_101'):
         super(RecogNet, self).__init__()
         self.image_h, self.image_w = image_h, image_w
         
