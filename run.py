@@ -28,7 +28,7 @@ def get_args():
     parser.add_argument("--num_workers", default=0, type=int)
     parser.add_argument("--train_ratio", default=0.8, type=float)
     
-    parser.add_argument("--margin", default=0.2, type=float)
+    parser.add_argument("--margin", default=2.0, type=float)
     parser.add_argument("--learnable_margin", action="store_true")
     parser.add_argument("--t_ema", action="store_true")
 
@@ -61,12 +61,12 @@ def triplet_loss(anchor, positive, negative, margin=0.2):
     return loss
 
 def train(args, basedir, model, train_dataset, valid_dataset, writer):
-    params = [{ 'params': model.parameters() }]
+    params = [{ 'params': model.parameters(), 'lr': 1e-3 }]
     
     margin = torch.tensor(args.margin).to(args.device)
     if args.learnable_margin:
         margin.requires_grad_()
-        params.append({ 'params': margin })
+        params.append({ 'params': margin, 'lr': 1e-5 })
     
     train_dl = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
     valid_dl = DataLoader(valid_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
@@ -93,16 +93,20 @@ def train(args, basedir, model, train_dataset, valid_dataset, writer):
             faces_pos[pos_flip_idx] = flipper(faces_pos[pos_flip_idx])
             faces_neg[neg_flip_idx] = flipper(faces_neg)[neg_flip_idx]
             
-            ft_anc = model(rotater(faces_anc))
-            ft_pos = model(rotater(faces_pos))
-            ft_neg = model(rotater(faces_neg))
+            faces_anc = rotater(faces_anc)
+            faces_pos = rotater(faces_pos)
+            faces_neg = rotater(faces_neg)
             
-            loss = triplet_loss(ft_anc, ft_pos, ft_neg, margin=margin.item())
+            ft_anc = model(faces_anc)
+            ft_pos = model(faces_pos)
+            ft_neg = model(faces_neg)
+            
+            loss = triplet_loss(ft_anc, ft_pos, ft_neg, margin=margin)
             loss.backward()
             optimizer.step()
             
-            if i_batch % 10 == 0:
-                with torch.no_grad():
+            with torch.no_grad():
+                if i_batch % 10 == 0:
                     threshold = (torch.norm(ft_pos - ft_anc, dim=-1).max() + torch.norm(ft_neg - ft_anc, dim=-1).min()) / 2
                     threshold = threshold.item()
                     
@@ -111,14 +115,24 @@ def train(args, basedir, model, train_dataset, valid_dataset, writer):
                         threshold = t_ema.value()
                     
                     tn, fp, acc = metric(ft_anc, ft_pos, ft_neg, threshold=threshold)
+                    writer.add_scalar("train/epoch", epoch, i_batch)
+                    
                     writer.add_scalar("train/t_neg", tn, i_batch)
                     writer.add_scalar("train/f_pos", fp, i_batch)
                     writer.add_scalar("train/accuracy", acc, i_batch)
-                    writer.add_scalar("train/triplet_loss", loss.item(), i_batch)    
+                    writer.add_scalar("train/triplet_loss", loss.item(), i_batch)  
+                      
+                    writer.add_scalar("hparam/threshold", threshold, i_batch)
+                    writer.add_scalar("hparam/margin", margin, i_batch)
+                    
+                    writer.add_image("train/image/anc", faces_anc[0].detach().cpu().numpy().transpose((2, 0, 1)), i_batch)
+                    writer.add_image("train/image/pos", faces_pos[0].detach().cpu().numpy().transpose((2, 0, 1)), i_batch)
+                    writer.add_image("train/image/neg", faces_neg[0].detach().cpu().numpy().transpose((2, 0, 1)), i_batch)
                     
                     tqdm.write(f"\tLoss: {loss.item():.4f}, Margin: {margin:.4f}, Threshold: {threshold:.4f}, Accuracy: {acc:.4f}, tn: {tn:.4f}, fp: {fp:.4f}")
                 
         with torch.no_grad():
+            
             model.eval()
             for i_batch, data in enumerate(tqdm(valid_dl)):
                 faces_anc, faces_pos, faces_neg, idx_anc, idx_pos, idx_neg = data
