@@ -36,7 +36,6 @@ def get_args():
     parser.add_argument("--t_ema", action="store_true")
 
     parser.add_argument("--backbone", default="resnet_50", type=str)
-    parser.add_argument("--loss", default="triplet", type=str)
 
     parser.add_argument("--checkpoint", default=None, type=str)
     parser.add_argument("--tag", default="train", type=str)
@@ -111,20 +110,21 @@ def train(args, basedir, model, train_dataset, valid_dataset, writer):
             
             faces_anc, faces_pos, faces_neg = faces_anc.permute(0, 2, 3, 1), faces_pos.permute(0, 2, 3, 1), faces_neg.permute(0, 2, 3, 1)
             
-            faces_anc = faces_anc + torch.normal(mean=0.0, std=0.05, size=faces_anc.shape, device=args.device)
-            faces_neg = faces_neg + torch.normal(mean=0.0, std=0.05, size=faces_neg.shape, device=args.device)
-            faces_pos = faces_pos + torch.normal(mean=0.0, std=0.05, size=faces_pos.shape, device=args.device)
+            faces_anc = faces_anc + torch.normal(mean=0.0, std=0.02, size=faces_anc.shape, device=args.device)
+            faces_pos = faces_pos + torch.normal(mean=0.0, std=0.02, size=faces_pos.shape, device=args.device)
+            faces_neg = faces_neg + torch.normal(mean=0.0, std=0.02, size=faces_neg.shape, device=args.device)
             
-            faces_anc, faces_pos, faces_anc = torch.clamp(faces_anc, 0, 1), torch.clamp(faces_pos, 0, 1), torch.clamp(faces_neg, 0, 1)
+            faces_anc, faces_pos, faces_neg = torch.clamp(faces_anc, 0, 1), torch.clamp(faces_pos, 0, 1), torch.clamp(faces_neg, 0, 1)
             
             ft_anc = model(faces_anc)
             ft_pos = model(faces_pos)
             ft_neg = model(faces_neg)
             
             loss_t = triplet_loss(ft_anc, ft_pos, ft_neg, margin=margin)
-            loss_r = (torch.norm(ft_anc, dim=-1) + torch.norm(ft_pos, dim=-1) + torch.norm(ft_neg, dim=-1) - 3).pow(2).mean()
-            
-            loss = (10 * loss_t + 1 * loss_r).mean()
+            loss_n = (torch.norm(ft_anc, dim=-1) - 1).pow(2).mean() + (torch.norm(ft_pos, dim=-1) - 1).pow(2).mean()  + (torch.norm(ft_neg, dim=-1) - 1).pow(2).mean() 
+            loss_r = torch.tensor([p.pow(2.0).sum() for p in model.parameters()], device=args.device).mean()
+ 
+            loss = 10 * loss_t.mean() + 0.01 * loss_n.mean() + 0.01 * loss_r
             loss.backward()
             optimizer.step()
             step += 1
@@ -149,9 +149,9 @@ def train(args, basedir, model, train_dataset, valid_dataset, writer):
                     writer.add_scalar("hparam/threshold", threshold, step)
                     writer.add_scalar("hparam/margin", margin, step)
                     
-                    writer.add_image("train/image/anc", faces_anc[0].detach().cpu().numpy().transpose((2, 0, 1)), step)
-                    writer.add_image("train/image/pos", faces_pos[0].detach().cpu().numpy().transpose((2, 0, 1)), step)
-                    writer.add_image("train/image/neg", faces_neg[0].detach().cpu().numpy().transpose((2, 0, 1)), step)
+                    # writer.add_image("train/image/anc", faces_anc[0].detach().cpu().numpy().transpose((2, 0, 1)), step)
+                    # writer.add_image("train/image/pos", faces_pos[0].detach().cpu().numpy().transpose((2, 0, 1)), step)
+                    # writer.add_image("train/image/neg", faces_neg[0].detach().cpu().numpy().transpose((2, 0, 1)), step)
                     
                     tqdm.write(f"\tLoss: {loss.item():.4f}, Margin: {margin:.4f}, Threshold: {threshold:.4f}, Accuracy: {acc:.4f}, tn: {tn:.4f}, fp: {fp:.4f}")
                 
