@@ -20,8 +20,8 @@ from utils.EMA import EMA
 def get_args():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--batch_size", default=128, type=int)
-    parser.add_argument("--epochs", default=100, type=int)
+    parser.add_argument("--batch_size", default=64, type=int)
+    parser.add_argument("--epochs", default=150, type=int)
 
     parser.add_argument("--H", default=64, type=int)
     parser.add_argument("--W", default=64, type=int)
