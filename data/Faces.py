@@ -15,7 +15,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
-from trochvision.transforms import Resize
+from torchvision.transforms import Resize
 from tqdm import tqdm
 import cv2
 
@@ -42,9 +42,9 @@ class Faces(Dataset):
         else:
             self.__getitem__ = self.test_getitem
             self.__len__ = lambda: len(self.idx_to_name)
-        self._load_test(base_dir)
+        self._load(base_dir)
         
-    @torch.no_grad
+    # @torch.no_grad
     def train_getitem(self, index):
         image_0 = self.get_image(index).clone().to(self.devicee)
         triplet, labels = self.get_triplet(index)
@@ -53,7 +53,7 @@ class Faces(Dataset):
         
         return image_0, triplet_images, labels
     
-    @torch.no_grad
+    # @torch.no_grad
     def test_getitem(self, index):
         image_0 = self.get_images(2 * index    ).clone().to(self.devicee)
         image_1 = self.get_images(2 * index + 1).clone().to(self.devicee)
@@ -81,11 +81,11 @@ class Faces(Dataset):
         # TODO: Resize image to H x W
         return img
 
-    @torch.no_grad
+    # @torch.no_grad
     def _load(self, base_dir, mode='train'):
         if mode == 'train' or mode == 'valid':
+            names = json.load(open(os.path.join(base_dir, "split.json"), 'r'))[mode]
             self.base_dir = os.path.join(base_dir, "training_set")
-            names = json.load(open(os.path.join(self.base_dir, "split.json"), 'r'))[mode]
             
             self.idx_to_name = []
             self.name_to_idx = {}

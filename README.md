@@ -49,7 +49,7 @@ python setup.py install --set USE_AVX_INSTRUCTIONS=1
 Download [predictor](https://assets.aidenli.net/dev/thu-prml-22/shape_predictor_68_face_landmarks.dat) into `ckpt/`
 
 
-## Data Preparation
+## Data Preparation (Optional)
 
 Download the [dataset zip file](https://assets.aidenli.net/dev/thu-prml-22/dataset.zip), unzip it in `data/`. The directory should be like:
 
@@ -88,7 +88,7 @@ This will generate 2 bounding boxes for each image: one for the untransformed ve
 Specify the training parameters in `config/hp.yaml`, then run:
 
 ```shell
-python train.py
+python run.py
 ```
 
 We also provide a checkpoint [recognet_demo_ckpt.pt (PENDING)](#). Download it and put it to `ckpt/recognet_demo_ckpt.pt`.
@@ -98,5 +98,5 @@ We also provide a checkpoint [recognet_demo_ckpt.pt (PENDING)](#). Download it a
 Specify the hyperparameters in `config/hp.yaml`, then run:
 
 ```shell
-python test.py --ckpt_path config/recognet_demo_ckpt.pt
+python run.py --test --ckpt_path ckpt/demo.pt
 ```

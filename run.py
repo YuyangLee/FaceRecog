@@ -1,7 +1,7 @@
 import argparse
 import json
-from datetime import datetime
 import os
+from datetime import datetime
 
 import tensorboardX
 import torch
@@ -10,6 +10,7 @@ from tqdm import tqdm, trange
 
 from data.Faces import Faces
 from models.RecogNet import RecogNet
+from utils.EMA import EMA
 
 
 def get_args():
@@ -24,6 +25,7 @@ def get_args():
     
     parser.add_argument("--margin", default=0.2, type=float)
     parser.add_argument("--learnable_margin", action="store_true")
+    parser.add_argument("--t_ema", action="store_true")
 
     parser.add_argument("--backbone", default="resnet_101", type=str)
     parser.add_argument("--loss", default="triplet", type=str)
@@ -33,22 +35,22 @@ def get_args():
     
     parser.add_argument("--test", action="store_true")
     
-    args = parser.get_args()
+    args = parser.parse_args()
     return args
 
 # @torch.jit.script
-def metric(anchor, positive, negative, margin=0.2):
-    dist_ap = torch.norm(anchor - positive, dim=1)
-    dist_an = torch.norm(anchor - negative, dim=1)
-    tn = (dist_ap > margin).mean().item()
-    fp = (dist_an < margin).mean().item()
+def metric(anchor, positive, negative, threshold=0.1):
+    dist_ap = torch.norm(anchor - positive, dim=-1)
+    dist_an = torch.norm(anchor - negative, dim=-1)
+    tn = (dist_ap > threshold).mean().item()
+    fp = (dist_an < threshold).mean().item()
     acc = tn + fp
     return tn, fp, acc
 
 # @torch.jit.script
 def triplet_loss(anchor, positive, negative, margin=0.2):
-    dist_ap = torch.norm(anchor - positive, dim=1)
-    dist_an = torch.norm(anchor - negative, dim=1)
+    dist_ap = torch.norm(anchor - positive, dim=-1)
+    dist_an = torch.norm(anchor - negative, dim=-1)
     loss = torch.mean(torch.clamp(dist_ap - dist_an + margin, min=0.0))
     return loss
 
@@ -64,6 +66,8 @@ def train(args, basedir, model, train_dataset, valid_dataset, writer):
     valid_dl = DataLoader(valid_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
     optimizer = torch.optim.Adam(params)
     
+    t_ema = EMA(0.99)
+    
     for epoch in range(args.epochs):
         model.train()
         for i_batch, data in tqdm(enumerate(train_dl)):
@@ -74,38 +78,48 @@ def train(args, basedir, model, train_dataset, valid_dataset, writer):
             ft_pos = model(faces_pos)
             ft_neg = model(faces_neg)
             
-            loss = triplet_loss(ft_anc, ft_pos, ft_neg, margin=margin)
+            loss = triplet_loss(ft_anc, ft_pos, ft_neg, margin=margin.item())
             loss.backward()
             optimizer.step()
             
             if i_batch % 10 == 0:
                 with torch.no_grad():
-                    tn, fp, acc = metric(ft_anc, ft_pos, ft_neg, margin=margin)
+                    threshold = (torch.norm(ft_pos - ft_anc, dim=-1).max() + torch.norm(ft_neg - ft_anc, dim=-1).min()) / 2
+                    threshold = threshold.item()
+                    
+                    if args.t_ema:
+                        t_ema.update(threshold)
+                        threshold = t_ema.value()
+                    
+                    tn, fp, acc = metric(ft_anc, ft_pos, ft_neg, threshold=threshold)
                     writer.add_scalar("train/t_neg", tn, i_batch)
                     writer.add_scalar("train/f_pos", fp, i_batch)
                     writer.add_scalar("train/accuracy", acc, i_batch)
                     writer.add_scalar("train/triplet_loss", loss.item(), i_batch)    
                 
-        model.eval()
-        for i_batch, data in tqdm(enumerate(valid_dl)):
-            faces_anc, faces_pos, faces_neg = data
-            
-            ft_anc = model(faces_anc)
-            ft_pos = model(faces_pos)
-            ft_neg = model(faces_neg)
-            
-            tn, fp, acc = metric(ft_anc, ft_pos, ft_neg, margin=margin)
-            writer.add_scalar("valid/t_neg", tn, i_batch)
-            writer.add_scalar("valid/f_pos", fp, i_batch)
-            writer.add_scalar("valid/accuracy", acc, i_batch)
+        with torch.no_grad():
+            model.eval()
+            for i_batch, data in tqdm(enumerate(valid_dl)):
+                faces_anc, faces_pos, faces_neg = data
+                
+                ft_anc = model(faces_anc)
+                ft_pos = model(faces_pos)
+                ft_neg = model(faces_neg)
+                
+                tn, fp, acc = metric(ft_anc, ft_pos, ft_neg, threshold=threshold)
+                writer.add_scalar("valid/t_neg", tn, i_batch)
+                writer.add_scalar("valid/f_pos", fp, i_batch)
+                writer.add_scalar("valid/accuracy", acc, i_batch)
         
-        if epoch % 10 == 0:
-            torch.save({
-                "args": args,
-                "margin": margin.item(),
-                "model": model.state_dict(),
-                "optimizer": optimizer.state_dict(),
-            }, os.path.join(basedir, f"{ args.backbone }_{ epoch }.pth"))
+        with torch.no_grad():
+            if epoch % 10 == 0:
+                torch.save({
+                    "args": args,
+                    "threshold": threshold,
+                    "margin": margin.item(),
+                    "model": model.state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                }, os.path.join(basedir, f"{ args.backbone }_{ epoch }.pth"))
 
 @torch.no_grad() 
 def test(args, basedir, model, test_ds, writer):
@@ -113,7 +127,7 @@ def test(args, basedir, model, test_ds, writer):
     margin = load_ckpt(args.checkpoint, model=model, optimizer=None)
     margin = torch.tensor(margin).to(args.device)
     
-    test_dl = DataLoader(test_ds, batch_size=args.batch_size, drop_last=False shuffle=False, num_workers=args.num_workers)
+    test_dl = DataLoader(test_ds, batch_size=args.batch_size, drop_last=False, shuffle=False, num_workers=args.num_workers)
     
     manifold_dist, recog_res = [], []
     for i_batch, data in tqdm(enumerate(test_dl)):
@@ -153,11 +167,11 @@ if __name__ == '__main__':
     recognet = RecogNet(128, 128, len_embedding=256, backbone=args.backbone)
     
     if not args.test:
-        train_ds = Faces("data/training_set", args.batch_size, mode='train', lazy=False, preload_device='cuda', device='cuda')
-        valid_ds = Faces("data/training_set", args.batch_size, mode='valid', lazy=False, preload_device='cuda', device='cuda')
+        train_ds = Faces("data", args.batch_size, mode='train', lazy=False, preload_device='cuda', device='cuda')
+        valid_ds = Faces("data", args.batch_size, mode='valid', lazy=False, preload_device='cuda', device='cuda')
         train(args, basedir, recognet, train_ds, valid_ds, writer)
 
     else:
-        test_ds = Faces("data/test_set", args.batch_size, mode='test', lazy=False, preload_device='cuda', device='cuda')
+        test_ds = Faces("data", args.batch_size, mode='test', lazy=False, preload_device='cuda', device='cuda')
         test(args, basedir, recognet, test_ds, writer)
         
