@@ -37,17 +37,23 @@ class Faces(Dataset):
         self.preload_device = preload_device
         self.device = device
         
+        self.aligned_images_paths = []
+        self.rectangles = []
+        self.aligned_images = []
+        
         if mode == 'train':
             self._getitem = self.train_getitem
             self.ratio = train_ratio
+            self.train_load(base_dir)
         elif mode == 'valid':
-            self._getitem = self.train_getitem
+            self._getitem = self.valid_getitem
             self.ratio = 1 - train_ratio
+            self.valid_load(base_dir)
         elif mode == 'test':
             self._getitem = self.test_getitem
         else:
             raise NotImplementedError("Mode not implemented.")
-        self._load(base_dir, mode)
+        
         
     def __len__(self):
         return self.len
@@ -61,6 +67,12 @@ class Faces(Dataset):
         pos_img = self.get_image(pos_idx).clone().to(self.device)
         neg_img = self.get_image(neg_idx).clone().to(self.device)
         return img_anc, pos_img, neg_img, torch.tensor(index).to(self.device), torch.tensor(pos_idx).to(self.device), torch.tensor(neg_idx).to(self.device)
+    
+    def valid_getitem(self, index):
+        img_i, img_j, label = self.all_data[index]
+        img_0, img_1 = self.get_image(img_i).clone(), self.get_image(img_j).clone()
+        label = torch.tensor(label, device=self.device, dtype=int)
+        return img_0, img_1, label
     
     def test_getitem(self, index):
         image_0 = self.get_images(2 * index    ).clone().to(self.device)
@@ -88,43 +100,36 @@ class Faces(Dataset):
     def train_get_image_lazy(self, index, device='cuda'):
         path = self.aligned_images_paths[index]
         img = torch.tensor(cv2.imread(path, cv2.IMREAD_COLOR)).float().to(device)[:, :, [2, 1, 0]] / 256 # BGR to RGB and scale to [0, 1]
-        rect_x1, rect_y1, rect_x2, rect_y2 = self.aligned_image_rect[index][0], self.aligned_image_rect[index][1], self.aligned_image_rect[index][2], self.aligned_image_rect[index][3]
+        rect_x1, rect_y1, rect_x2, rect_y2 = self.rectangles[index][0], self.rectangles[index][1], self.rectangles[index][2], self.rectangles[index][3]
         img = self._crop_and_resize(img, rect_x1, rect_y1, rect_x2, rect_y2)
         return img
 
-    def _load(self, base_dir, mode='train'):
-        if mode == 'train' or mode == 'valid':
-            self.base_dir = os.path.join(base_dir, "training_set")
-            
-            self.idx_to_name = []
-            self.name_to_idx = defaultdict(list)
-            
-            self.aligned_images_paths = []
-            self.aligned_image_rect = []
-            
-            self.aligned_images = []
-            
-        elif mode == 'test':
-            self.base_dir = os.path.join(base_dir, "test_pair")
+    def _load_image(self, aligned_file_path, rectangle, image_idx):
+        self.aligned_images_paths.append(aligned_file_path)
+        self.rectangles.append(rectangle)
+        if not self.lazy:
+            self.aligned_images.append(self.train_get_image_lazy(image_idx, self.preload_device))
+            self.get_image = self.train_get_image_pre
+        else:
+            self.get_image = lambda i: self.train_get_image_lazy(i, device=self.device)
+
+    def train_load(self, base_dir):
+        self.base_dir = os.path.join(base_dir, "training_set")
+        
+        self.idx_to_name = []
+        self.name_to_idx = defaultdict(list)
         
         meta = json.load(open(os.path.join(self.base_dir, "bb.json"), 'r'))
-        names = list(meta.keys())
-        random.shuffle(names)
-        names = names[:int(len(names) * self.ratio)]
-        
-        if 'failure' in names:
-            names.remove('failure')
+        names = json.load(open(os.path.join(self.base_dir, "train.json"), 'r'))
         
         meta = { k: v for k, v in meta.items() if k in names }
             
-        print(f"Loading data in { mode } mode...")
         for i_name, (name, metadata) in enumerate(meta.items()):
             aligned_img_files = metadata['pics_aligned']
             
             # Prepare lists for data
             for i_file, aligned_img_file in enumerate(aligned_img_files):
                 rectangle = metadata['align_params'][aligned_img_file]['rect_aligned']
-                
                 rectangle = torch.tensor(rectangle, device=self.device)
                 if (rectangle < 0).sum() > 0:
                     print(f"\tSkipped { aligned_img_file } because of error values in rectangle.")
@@ -134,15 +139,44 @@ class Faces(Dataset):
                 
                 self.name_to_idx[name].append(len(self.idx_to_name))
                 self.idx_to_name.append(name)
-                self.aligned_images_paths.append(aligned_file_path)
-                self.aligned_image_rect.append(rectangle)
                 
-                if not self.lazy:
-                    self.aligned_images.append(self.train_get_image_lazy(len(self.idx_to_name) - 1, self.preload_device))
-                    self.get_image = self.train_get_image_pre
-                else:
-                    self.get_image = lambda i: self.train_get_image_lazy(i, device=self.device)
+                self._load_image(aligned_file_path, rectangle, len(self.idx_to_name) - 1)
                     
-        self.len = len(self.idx_to_name) / 2 if mode == 'test' else len(self.idx_to_name)
-        tqdm.write(f"Loading { self.len} (instances / pairs of) data in { mode } mode...")
+        self.len = len(self.idx_to_name)
+        tqdm.write(f"Loading { self.len} data instances in training mode...")
         
+    def valid_load(self, base_dir):
+        self.base_dir = os.path.join(base_dir, "training_set")
+        
+        self.all_data = []
+        
+        meta = json.load(open(os.path.join(self.base_dir, "bb.json"), 'r'))
+        pairs = json.load(open(os.path.join(self.base_dir, "valid.json"), 'r'))
+        
+        for pair in pairs:
+            data = []
+            for i_person, person in enumerate(pair[:-1]):
+                img_i = len(self.aligned_images)
+                data.append(img_i)
+                aligned_img_file = os.path.join(self.base_dir, person[0], "aligned", person[1])
+                
+                metadata = meta[person[0]]
+                if person[1] not in metadata['pics_aligned']:
+                    print(f"Skipped { aligned_img_file } because it is not in the metadata.")
+                    continue
+                rectangle = metadata['align_params'][person[1]]['rect_aligned']
+                rectangle = torch.tensor(rectangle, device=self.device)
+                
+                # Error bbs are excluded when processing pair lists
+                self._load_image(aligned_img_file, rectangle, img_i)
+                
+            data.append(pair[-1])
+            self.all_data.append(data)
+        self.len = len(self.all_data)
+    
+        tqdm.write(f"Loading { self.len} data pairs in validation mode...")
+        
+    def test_load(self, base_dir):
+        self.base_dir = os.path.join(base_dir, "test_pair")
+        self.len = len(self.idx_to_name) / 2    
+    

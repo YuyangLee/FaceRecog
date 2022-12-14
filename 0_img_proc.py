@@ -34,8 +34,6 @@ split = {
     "valid": []
 }
 
-valid_candidate = []
-
 for directory in [ test_dir, training_dir ]:
     failure_images = []
     metadata = {}
@@ -130,10 +128,4 @@ for directory in [ test_dir, training_dir ]:
     metadata['failure'] = failure_images
     json.dump(metadata, open(os.path.join(directory, "bb.json"), 'w'))
     
-for i in range(1000):
-    valid_person = random.choice(valid_candidate)
-    valid_candidate.remove(valid_person)
-    split['valid'].append(valid_person)
-    
-split['train'] += valid_candidate
     

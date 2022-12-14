@@ -18,7 +18,6 @@ class RecogNet(nn.Module):
             raise NotImplementedError()
         
     def forward(self, image):
-        image = image.permute(0, 3, 1, 2)
         return self.image_encoder(image)
         
         
