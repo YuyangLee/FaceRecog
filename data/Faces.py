@@ -23,7 +23,12 @@ from tqdm import tqdm
 import cv2
 
 class Faces(Dataset):
-    def __init__(self, base_dir, batch_size=16, H=64, W=64, mode='train', lazy=False, preload_device='cpu', device='cuda'):
+    def __init__(self,
+                base_dir,
+                batch_size=16, H=64, W=64,
+                mode='train', train_extractor='triplet', force_pos_max=16,
+                lazy=False, preload_device='cpu', device='cuda'
+                ):
         super().__init__()
         
         self.lazy = lazy
@@ -42,7 +47,11 @@ class Faces(Dataset):
         self.aligned_images = []
         
         if mode == 'train':
-            self._getitem = self.train_getitem
+            self._getitem = {
+                'triplet': self.train_getitem_triplet,
+                'single': self.train_getitem_single,
+                'single_force_pos': self.train_getitem_single_force_pos
+            }[train_extractor]
             self.train_load(base_dir)
         elif mode == 'valid':
             self._getitem = self.valid_getitem
@@ -52,19 +61,31 @@ class Faces(Dataset):
         else:
             raise NotImplementedError("Mode not implemented.")
         
-        
     def __len__(self):
         return self.len
     
     def __getitem__(self, index):
         return self._getitem(index)
         
-    def train_getitem(self, index):
+    def train_getitem_triplet(self, index):
         img_anc = self.get_image(index).clone().to(self.device)
         pos_idx, neg_idx = self.get_triplet(index)
         pos_img = self.get_image(pos_idx).clone().to(self.device)
         neg_img = self.get_image(neg_idx).clone().to(self.device)
         return img_anc, pos_img, neg_img, torch.tensor(index).to(self.device), torch.tensor(pos_idx).to(self.device), torch.tensor(neg_idx).to(self.device)
+    
+    def train_getitem_single(self, index):
+        img = self.get_image(index).clone().to(self.device)
+        label = torch.tensor(self.name_to_label[index], dtype=int, device=self.device)
+        return img, label
+    
+    def train_getitem_single_force_pos(self, index):
+        idxs = self.name_to_idx[self.idx_to_name[index]]
+        n_pos = min(len(idxs), self.force_pos_max)
+        pos_idxs = random.sample
+        img = self.get_image(index).clone().to(self.device)
+        label = torch.tensor(self.name_to_label[index], dtype=int, device=self.device)
+        return img, label
     
     def valid_getitem(self, index):
         img_i, img_j, label = self.all_data[index]
@@ -116,6 +137,7 @@ class Faces(Dataset):
         
         self.idx_to_name = []
         self.name_to_idx = defaultdict(list)
+        self.name_to_label = {}
         
         meta = json.load(open(os.path.join(self.base_dir, "bb.json"), 'r'))
         names = json.load(open(os.path.join(self.base_dir, "train.json"), 'r'))
@@ -124,6 +146,7 @@ class Faces(Dataset):
             
         for i_name, (name, metadata) in enumerate(meta.items()):
             aligned_img_files = metadata['pics_aligned']
+            self.name_to_label[name] = i_name
             
             # Prepare lists for data
             for i_file, aligned_img_file in enumerate(aligned_img_files):
