@@ -29,11 +29,6 @@ ckpt_path = "ckpt"
 detector = dlib.get_frontal_face_detector()
 predictor = dlib.shape_predictor(os.path.join(ckpt_path, "shape_predictor_68_face_landmarks.dat"))
 
-split = {
-    "train": [],
-    "valid": []
-}
-
 for directory in [ test_dir, training_dir ]:
     failure_images = []
     metadata = {}
@@ -46,11 +41,6 @@ for directory in [ test_dir, training_dir ]:
             continue
         image_list = os.listdir(person_dir)
         os.makedirs(os.path.join(person_dir, "aligned"), exist_ok=True)
-        
-        if len(image_list) >= 2:
-            valid_candidate.append(person)
-        else:
-            split['train'].append(person)
         
         metadata[person] = {
             "name": person,
@@ -127,5 +117,4 @@ for directory in [ test_dir, training_dir ]:
                 
     metadata['failure'] = failure_images
     json.dump(metadata, open(os.path.join(directory, "bb.json"), 'w'))
-    
     

@@ -20,7 +20,7 @@ from utils.EMA import EMA
 def get_args():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--batch_size", default=64, type=int)
+    parser.add_argument("--batch_size", default=128, type=int)
     parser.add_argument("--epochs", default=180, type=int)
 
     parser.add_argument("--H", default=128, type=int)
@@ -29,7 +29,6 @@ def get_args():
     # Dataset
     parser.add_argument("--lazy_load", action="store_true")
     parser.add_argument("--num_workers", default=0, type=int)
-    parser.add_argument("--train_ratio", default=0.8, type=float)
     
     parser.add_argument("--margin", default=0.15, type=float)
     parser.add_argument("--learnable_margin", action="store_true")
@@ -62,12 +61,14 @@ def metric(anchor, positive, negative, threshold):
     fp = (dist_an < threshold).float().mean().item()
     return tn, fp
 
+# TODO: Margin annealing
 @torch.jit.script
 def triplet_loss(anchor, positive, negative, margin):
     dist_ap = torch.norm(anchor - positive, dim=-1)
     dist_an = torch.norm(anchor - negative, dim=-1)
     loss = torch.relu(dist_ap - dist_an + margin)
     return loss
+
 
 def train(args, basedir, model, train_dataset, valid_dataset, writer):
     params = [{ 'params': model.parameters(), 'lr': 1e-3 }]
@@ -121,9 +122,9 @@ def train(args, basedir, model, train_dataset, valid_dataset, writer):
             
             loss_t = triplet_loss(ft_anc, ft_pos, ft_neg, margin=margin)
             loss_n = (torch.norm(ft_anc, dim=-1) - 1).pow(2).mean() + (torch.norm(ft_pos, dim=-1) - 1).pow(2).mean()  + (torch.norm(ft_neg, dim=-1) - 1).pow(2).mean() 
-            loss_r = torch.tensor([p.pow(2.0).sum() for p in model.parameters()], device=args.device).mean()
+            # loss_r = torch.tensor([p.pow(2.0).sum() for p in model.parameters()], device=args.device).mean()
  
-            loss = 10 * loss_t.mean() + 0.01 * loss_n.mean() + 0.01 * loss_r
+            loss = 10 * loss_t.mean() + loss_n.mean() # + 0.001 * loss_r
             loss.backward()
             optimizer.step()
             step += 1
@@ -142,7 +143,10 @@ def train(args, basedir, model, train_dataset, valid_dataset, writer):
                     
                     writer.add_scalar("train/t_neg", tn, step)
                     writer.add_scalar("train/f_pos", fp, step)
-                    writer.add_scalar("train/triplet_loss", loss.item(), step)  
+                    writer.add_scalar("train/triplet_loss", loss_t.mean().item(), step)  
+                    writer.add_scalar("train/norm_loss", loss_n.mean().item(), step)  
+                    # writer.add_scalar("train/reg_loss", loss_r.item(), step)  
+                    writer.add_scalar("train/loss", loss.item(), step)  
                       
                     writer.add_scalar("hparam/threshold", threshold, step)
                     writer.add_scalar("hparam/margin", margin, step)
@@ -154,36 +158,42 @@ def train(args, basedir, model, train_dataset, valid_dataset, writer):
                     tqdm.write(f"\tLoss: {loss.item():.4f}, Margin: {margin:.4f}, Threshold: {threshold:.4f}, tn: {tn:.4f}, fp: {fp:.4f}")
                 
             
-        with torch.no_grad():
-            model.eval()
-            tns, fps, accs = [], [], []
-            for i_batch, data in enumerate(tqdm(valid_dl)):
-                faces_0, faces_1, label = data
+        if epoch % 5 == 4:
+            with torch.no_grad():
+                model.eval()
+                tns, fps, accs = [], [], []
+                for i_batch, data in enumerate(tqdm(valid_dl)):
+                    faces_0, faces_1, label = data
+                    
+                    faces_0, faces_1 = faces_0.permute(0, 3, 1, 2), faces_1.permute(0, 3, 1, 2)
+                    
+                    ft_0 = model(faces_0)
+                    ft_1 = model(faces_1)
+                    
+                    dist = torch.norm(ft_0 - ft_1, dim=-1)
+                    pred_1 = (dist < threshold).float()
+                    pred_0 = 1 - pred_1
+                    
+                    fp = (pred_0 * label).sum().item() / (label.sum().item() + 1e-12)
+                    tn = (pred_1 * (1 - label)).sum().item() / ((1 - label).sum().item() + 1e-12)
+                    acc = ((pred_1 * label) + pred_0 * (1 - label)).sum().item() / args.batch_size
+                    
+                    tns.append(tn)
+                    fps.append(fp)
+                    accs.append(acc)
+                    
+                threshold = np.array(tns).mean()
+                fp = np.array(fps).mean()
+                tn = np.array(tns).mean()
+                acc = np.array(accs).mean()
                 
-                faces_0, faces_1 = faces_0.permute(0, 3, 1, 2), faces_1.permute(0, 3, 1, 2)
-                
-                ft_0 = model(faces_0)
-                ft_1 = model(faces_1)
-                
-                dist = torch.norm(ft_0 - ft_1, dim=-1)
-                pred_t = (dist < threshold).float()
-                pred_f = 1 - pred_t
-                
-                fp = (pred_t * label).sum().item() / (label.sum().item() + 1e-12)
-                tn = (pred_f * (1 - label)).sum().item() / ((1 - label).sum().item() + 1e-12)
-                acc = ((pred_f * label) + pred_t * (1 - label)).sum().item() / args.batch_size
-                
-                tns.append(tn)
-                fps.append(fp)
-                accs.append(acc)
-                
-            writer.add_scalar("valid/t_neg", np.array(tns).mean(), step)
-            writer.add_scalar("valid/f_pos", np.array(fps).mean(), step)
-            writer.add_scalar("valid/accuracy", np.array(accs).mean(), step)
-            tqdm.write(f"\tThreshold: {threshold:.4f}, Accuracy: {acc:.4f}, tn: {tn:.4f}, fp: {fp:.4f}")
+                writer.add_scalar("valid/f_pos", fp, step)
+                writer.add_scalar("valid/t_neg", tn, step)
+                writer.add_scalar("valid/accuracy", acc.mean(), step)
+                tqdm.write(f"\tThreshold: {threshold:.4f}, Accuracy: {acc:.4f}, tn: {tn:.4f}, fp: {fp:.4f}")
         
-        with torch.no_grad():
-            if epoch % 10 == 0:
+        if epoch % 10 == 9:
+            with torch.no_grad():
                 torch.save({
                     "args": args,
                     "threshold": threshold,
@@ -224,10 +234,10 @@ def test(args, basedir, model, test_ds, writer):
 def load_ckpt(path, model, optimizer=None):
     ckpt = torch.load(path)
     model.load_state_dict(ckpt["model"])
-    margin = ckpt["margin"]
+    threshold = ckpt["threshold"]
     if optimizer is not None:
         optimizer.load_state_dict(ckpt["optimizer"])
-    return margin
+    return threshold
 
 if __name__ == '__main__':
     args = get_args()
@@ -242,8 +252,8 @@ if __name__ == '__main__':
     
     if not args.test:
         with torch.no_grad():
-            train_ds = Faces("data", args.batch_size, args.H, args.W, mode='train', train_ratio=args.train_ratio, lazy=args.lazy_load, preload_device='cuda', device='cuda')
-            valid_ds = Faces("data", args.batch_size, args.H, args.W, mode='valid', train_ratio=args.train_ratio, lazy=args.lazy_load, preload_device='cuda', device='cuda')
+            train_ds = Faces("data", args.batch_size, args.H, args.W, mode='train', lazy=args.lazy_load, preload_device='cuda', device='cuda')
+            valid_ds = Faces("data", args.batch_size, args.H, args.W, mode='valid', lazy=args.lazy_load, preload_device='cuda', device='cuda')
         train(args, basedir, recognet, train_ds, valid_ds, writer)
 
     else:

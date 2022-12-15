@@ -75,7 +75,7 @@ n_img = []
 pos_candidates = []
 neg_candidates = []
 
-n_pos, n_neg_cand = 1000, 100
+n_pos, n_neg_cand = 300, 60
 
 for person in person_list:
     person_dir = os.path.join(training_dir, person)
@@ -90,8 +90,6 @@ for person in person_list:
         # Only one images, use as validate negative pairs
         neg_candidates += [[person, image_list[i]] for i in range(len(image_list))]
         n_neg_cand -= 1
-    else:
-        split['train'].append(person)
 
 for person in person_list:
     person_dir = os.path.join(training_dir, person)
@@ -123,6 +121,19 @@ for person in person_list:
 
     elif not person in pos_candidates:
         split['train'].append(person)
+        
+for (p1, _), (p2, _), _ in split['valid']:
+    # assert p1 in split['train']
+    # assert p2 in split['train']
+    if p1 in split['train']:
+        print(p1)
+        split['train'].remove(p1)
+    if p2 in split['train']:
+        print(p2)
+        split['train'].remove(p2)
+        
+print(len(split['train']))
+print(len(split['valid']))
         
 json.dump(split['train'], open("data/training_set/train.json", 'w'))
 json.dump(split['valid'], open("data/training_set/valid.json", 'w'))

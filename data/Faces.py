@@ -23,7 +23,7 @@ from tqdm import tqdm
 import cv2
 
 class Faces(Dataset):
-    def __init__(self, base_dir, batch_size=16, H=64, W=64, mode='train', train_ratio=0.8, lazy=False, preload_device='cpu', device='cuda'):
+    def __init__(self, base_dir, batch_size=16, H=64, W=64, mode='train', lazy=False, preload_device='cpu', device='cuda'):
         super().__init__()
         
         self.lazy = lazy
@@ -43,11 +43,9 @@ class Faces(Dataset):
         
         if mode == 'train':
             self._getitem = self.train_getitem
-            self.ratio = train_ratio
             self.train_load(base_dir)
         elif mode == 'valid':
             self._getitem = self.valid_getitem
-            self.ratio = 1 - train_ratio
             self.valid_load(base_dir)
         elif mode == 'test':
             self._getitem = self.test_getitem
@@ -180,3 +178,32 @@ class Faces(Dataset):
         self.base_dir = os.path.join(base_dir, "test_pair")
         self.len = len(self.idx_to_name) / 2    
     
+        self.base_dir = os.path.join(base_dir, "training_set")
+        
+        self.all_data = []
+        
+        meta = json.load(open(os.path.join(self.base_dir, "bb.json"), 'r'))
+        pairs = json.load(open(os.path.join(self.base_dir, "valid.json"), 'r'))
+        
+        for pair in pairs:
+            data = []
+            for i_person, person in enumerate(pair[:-1]):
+                img_i = len(self.aligned_images)
+                data.append(img_i)
+                aligned_img_file = os.path.join(self.base_dir, person[0], "aligned", person[1])
+                
+                metadata = meta[person[0]]
+                if person[1] not in metadata['pics_aligned']:
+                    print(f"Skipped { aligned_img_file } because it is not in the metadata.")
+                    continue
+                rectangle = metadata['align_params'][person[1]]['rect_aligned']
+                rectangle = torch.tensor(rectangle, device=self.device)
+                
+                # Error bbs are excluded when processing pair lists
+                self._load_image(aligned_img_file, rectangle, img_i)
+                
+            data.append(pair[-1])
+            self.all_data.append(data)
+        self.len = len(self.all_data)
+    
+        tqdm.write(f"Loading { self.len} data pairs in validation mode...")
