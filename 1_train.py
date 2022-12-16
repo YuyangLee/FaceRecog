@@ -15,8 +15,9 @@ from tqdm import tqdm, trange
 from data.Faces import Faces
 from models.RecogNet import RecogNet
 from utils.EMA import EMA
-from utils.utils_dev import set_seed, get_args
+from utils.utils_dev import set_seed, get_args, has_nan
 from utils.utils_loss import triplet_l2, triplet_cos, pairwise_l2, liftstr_l2
+import torch.multiprocessing as mp
 
 t_ema = EMA(0.95)
 
@@ -96,6 +97,9 @@ def pair_based_forward(args, model, data, aug_warpper, self_flipper, loss_fn, ma
     
     loss = 1.0 * loss_p.mean() + 1.0 * loss_n.mean() # + 0.001 * loss_r
     
+    if has_nan(loss):
+        raise NotImplementedError()
+    
     if t_ema is not None:
         t_ema.update(threshold.item())
         threshold = t_ema.value()
@@ -134,8 +138,14 @@ def train(args, basedir, model, train_dataset, valid_dataset, frw_fn, loss_fn, w
     flipper = RandomHorizontalFlip(p=1.0)
     aug_transforms = transforms.Compose([
         transforms.RandomAffine(degrees=10, scale=(0.95, 1.05), shear=5),
-        transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, hue=0.1),
-        # transforms.RandomErasing(scale=(0.02, 0.05))
+        transforms.RandomGrayscale(p=0.25),
+        transforms.RandomApply([transforms.ColorJitter(brightness=0.2, contrast=0.1, saturation=0.1, hue=0.1)], p=0.5),
+        transforms.RandomApply([transforms.GaussianBlur(15, 1.0)], p=0.5),
+        # transforms.RandomErasing(scale=(0.02, 0.05)),
+        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
+    ])
+    norm_transforms = transforms.Compose([
+        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
     ])
 
     aug_warpper = aug_transforms if args.aug else lambda x: x
@@ -148,6 +158,7 @@ def train(args, basedir, model, train_dataset, valid_dataset, frw_fn, loss_fn, w
         model.train()
         for i_batch, data in enumerate(tqdm(train_dl)):
             optimizer.zero_grad()
+            data = [d.to(args.device) for d in data]
             
             res, threshold = frw_fn(args, model, data, aug_warpper, flipper, loss_fn, margin)
             
@@ -157,11 +168,10 @@ def train(args, basedir, model, train_dataset, valid_dataset, frw_fn, loss_fn, w
             optimizer.step()
             
             if i_batch % 10 == 0:
-                
                 for k, v in stat.items():
                     writer.add_scalar(k, v, step)
                 
-            if i_batch % 50 == 0:
+            if i_batch % 10 == 0:
                 # writer.add_image("train/image/anc", faces_anc[0].detach().cpu().numpy(), step)
                 # writer.add_image("train/image/pos", faces_pos[0].detach().cpu().numpy(), step)
                 # writer.add_image("train/image/neg", faces_neg[0].detach().cpu().numpy(), step)
@@ -174,10 +184,14 @@ def train(args, basedir, model, train_dataset, valid_dataset, frw_fn, loss_fn, w
             with torch.no_grad():
                 model.eval()
                 tns, fps, accs = [], [], []
+                labels = []
                 for i_batch, data in enumerate(tqdm(valid_dl)):
+                    data = [d.to(args.device) for d in data]
                     faces_0, faces_1, label = data
                     
                     faces_0, faces_1 = faces_0.permute(0, 3, 1, 2), faces_1.permute(0, 3, 1, 2)
+                    
+                    faces_0, faces_1 = torch.clamp(norm_transforms(faces_0), 0., 1.), torch.clamp(norm_transforms(faces_1), 0., 1.)
                     
                     ft_0 = model(faces_0)
                     ft_1 = model(faces_1)
@@ -186,23 +200,27 @@ def train(args, basedir, model, train_dataset, valid_dataset, frw_fn, loss_fn, w
                     pred_1 = (dist < threshold).float()
                     pred_0 = 1 - pred_1
                     
-                    fp = (pred_0 * label).sum() / (label.sum() + 1e-12)
-                    tn = (pred_1 * (1 - label)).sum() / ((1 - label).sum() + 1e-12)
-                    acc = ((pred_1 * label) + pred_0 * (1 - label)).sum() / args.batch_size
+                    fp = pred_0 * label
+                    tn = pred_1 * (1 - label)
+                    acc = ((pred_1 * label) + pred_0 * (1 - label))
                     
                     tns.append(tn)
                     fps.append(fp)
                     accs.append(acc)
-                    
-                threshold = np.array(tns).mean()
-                fp, tn, acc = np.array(fps).mean(), np.array(tns).mean(), np.array(accs).mean()
+                    labels.append(label)
+                
+                fps, tns, accs, labels = torch.cat(fps).mean(), torch.cat(tns).mean(), torch.cat(accs).mean(), torch.cat(labels)
+                
+                fp = fps.sum() / labels.sum()
+                tn = tns.sum() / (1 - labels).sum()
+                acc = accs.mean()
                 
                 writer.add_scalar("valid/f_pos", fp, step)
                 writer.add_scalar("valid/t_neg", tn, step)
                 writer.add_scalar("valid/accuracy", acc.mean(), step)
                 tqdm.write(f"\tThreshold: {threshold:.4f}, Accuracy: {acc:.4f}, tn: {tn:.4f}, fp: {fp:.4f}")
         
-        if epoch % 10 == 9:
+        if epoch % 50 == 9:
             with torch.no_grad():
                 torch.save({
                     "args": args,
@@ -240,7 +258,6 @@ def test(args, basedir, model, test_ds, writer):
         f.writelines(manifold_dist)
         f.close()
         
-            
 def load_ckpt(path, model, optimizer=None):
     ckpt = torch.load(path)
     model.load_state_dict(ckpt["model"])
@@ -249,8 +266,6 @@ def load_ckpt(path, model, optimizer=None):
         optimizer.load_state_dict(ckpt["optimizer"])
     return threshold
 
-def lifted_structure(features, labels):
-    pass
 
 if __name__ == '__main__':
     args = get_args()
@@ -282,10 +297,15 @@ if __name__ == '__main__':
     else:
         raise NotImplementedError("Loss function not implemented")
     
+    args.num_workers = 16
+    args.lazy_load = False
+    args.preload_device = 'cpu'
+    args.device='cuda'
+    
     if not args.test:
         with torch.no_grad():
-            train_ds = Faces("data", args.batch_size, args.H, args.W, mode='train', train_extractor=train_extractor, lazy=args.lazy_load, preload_device='cuda', device='cuda')
-            valid_ds = Faces("data", args.batch_size, args.H, args.W, mode='valid', train_extractor=train_extractor,lazy=args.lazy_load, preload_device='cuda', device='cuda')
+            train_ds = Faces("data", args.batch_size, args.H, args.W, mode='train', train_extractor=train_extractor, lazy=args.lazy_load, device=args.preload_device)
+            valid_ds = Faces("data", args.batch_size, args.H, args.W, mode='valid', train_extractor=train_extractor,lazy=args.lazy_load, device=args.preload_device)
         train(args, basedir, recognet, train_ds, valid_ds, frw_fn, loss_fn, writer)
 
     else:

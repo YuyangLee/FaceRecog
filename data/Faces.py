@@ -27,7 +27,7 @@ class Faces(Dataset):
                 base_dir,
                 batch_size=16, H=64, W=64,
                 mode='train', train_extractor='triplet',
-                lazy=False, preload_device='cpu', device='cuda'
+                lazy=False, device='cpu'
                 ):
         super().__init__()
         
@@ -39,7 +39,6 @@ class Faces(Dataset):
         self.H, self.W = H, W
         self.resizer = Resize((H, W))   # Bilinear
         
-        self.preload_device = preload_device
         self.device = device
         
         self.aligned_images_paths = []
@@ -69,21 +68,21 @@ class Faces(Dataset):
         return self._getitem(index)
         
     def _train_getitem_triplet(self, index):
-        img_anc = self.get_image(index).clone().to(self.device)
+        img_anc = self.get_image(index).clone()
         idx_pos, idx_neg = self._get_triplet(index)
-        img_pos = self.get_image(idx_pos).clone().to(self.device)
-        img_neg = self.get_image(idx_neg).clone().to(self.device)
-        label_anc, label_pos, label_neg = torch.tensor(self.idx_to_label[index]).to(self.device), torch.tensor(self.idx_to_label[idx_pos]).to(self.device), torch.tensor(self.idx_to_label[idx_neg]).to(self.device)
+        img_pos = self.get_image(idx_pos).clone()
+        img_neg = self.get_image(idx_neg).clone()
+        label_anc, label_pos, label_neg = torch.tensor(self.idx_to_label[index]), torch.tensor(self.idx_to_label[idx_pos]), torch.tensor(self.idx_to_label[idx_neg])
         return img_anc, img_pos, img_neg, label_anc, label_pos, label_neg
     
     def _train_getitem_pair(self, index):
         """
         Get item for pair-based methods, returns a positive pair with name index as labels.
         """
-        img = self.get_image(index).clone().to(self.device)
+        img = self.get_image(index).clone()
         idx_pos = self._get_pos_cp(index)
-        img_pos = self.get_image(idx_pos).clone().to(self.device)
-        label_0, label_1 = torch.tensor(self.idx_to_label[index]).to(self.device), torch.tensor(self.nameidx_to_label_to_label[idx_pos]).to(self.device)
+        img_pos = self.get_image(idx_pos).clone()
+        label_0, label_1 = torch.tensor(self.idx_to_label[index]), torch.tensor(self.idx_to_label[idx_pos])
         return img, img_pos, label_0, label_1
     
     def valid_getitem(self, index):
@@ -93,8 +92,8 @@ class Faces(Dataset):
         return img_0, img_1, label
     
     def test_getitem(self, index):
-        image_0 = self.get_images(2 * index    ).clone().to(self.device)
-        image_1 = self.get_images(2 * index + 1).clone().to(self.device)
+        image_0 = self.get_images(2 * index    ).clone()
+        image_1 = self.get_images(2 * index + 1).clone()
         return image_0, image_1
     
     def _get_pos_cp(self, index):
@@ -119,11 +118,11 @@ class Faces(Dataset):
         return img
     
     def train_get_image_pre(self, index):
-        return self.aligned_images[index].to(self.device)
+        return self.aligned_images[index]
     
-    def train_get_image_lazy(self, index, device='cuda'):
+    def train_get_image_lazy(self, index):
         path = self.aligned_images_paths[index]
-        img = torch.tensor(cv2.imread(path, cv2.IMREAD_COLOR)).float().to(device)[:, :, [2, 1, 0]] / 256 # BGR to RGB and scale to [0, 1]
+        img = torch.tensor(cv2.imread(path, cv2.IMREAD_COLOR)).float()[:, :, [2, 1, 0]] / 256 # BGR to RGB and scale to [0, 1]
         rect_x1, rect_y1, rect_x2, rect_y2 = self.rectangles[index][0], self.rectangles[index][1], self.rectangles[index][2], self.rectangles[index][3]
         img = self._crop_and_resize(img, rect_x1, rect_y1, rect_x2, rect_y2)
         return img
@@ -132,10 +131,10 @@ class Faces(Dataset):
         self.aligned_images_paths.append(aligned_file_path)
         self.rectangles.append(rectangle)
         if not self.lazy:
-            self.aligned_images.append(self.train_get_image_lazy(image_idx, self.preload_device))
+            self.aligned_images.append(self.train_get_image_lazy(image_idx))
             self.get_image = self.train_get_image_pre
         else:
-            self.get_image = lambda i: self.train_get_image_lazy(i, device=self.device)
+            self.get_image = lambda i: self.train_get_image_lazy(i)
 
     def train_load(self, base_dir):
         self.base_dir = os.path.join(base_dir, "training_set")

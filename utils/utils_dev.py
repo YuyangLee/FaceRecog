@@ -8,15 +8,15 @@ import torch
 def get_args():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--batch_size", default=4, type=int)
-    parser.add_argument("--epochs", default=180, type=int)
+    parser.add_argument("--batch_size", default=128, type=int)
+    parser.add_argument("--epochs", default=250, type=int)
 
     parser.add_argument("--H", default=128, type=int)
     parser.add_argument("--W", default=128, type=int)
     
     # Dataset
     parser.add_argument("--lazy_load", action="store_true")
-    parser.add_argument("--num_workers", default=0, type=int)
+    parser.add_argument("--num_workers", default=16, type=int)
     
     parser.add_argument("--margin", default=0.20, type=float)
     parser.add_argument("--margin_warmup", action="store_true")
@@ -34,6 +34,7 @@ def get_args():
     
     parser.add_argument("--test", action="store_true")
     parser.add_argument("--device", default="cuda", type=str)
+    parser.add_argument("--preload_device", default="cpu", type=str)
     
     parser.add_argument("--seed", default=42, type=int)
     
@@ -45,4 +46,7 @@ def set_seed(seed):
     torch.cuda.manual_seed(seed)
     np.random.seed(seed)
     random.seed(seed)
+    
+def has_nan(x):
+    return torch.isnan(x).any()
     

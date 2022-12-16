@@ -22,8 +22,8 @@ def pair_thres(dst_mat, adj_mat):
 def pair_acc(dst_mat, adj_mat, threshold):
     pos_adj = torch.triu(    adj_mat, diagonal=1)
     neg_adj = torch.triu(1 - adj_mat, diagonal=1)
-    tn = (dst_mat * pos_adj > threshold).float().sum() / (pos_adj.sum() + 1e-12)
-    fp = (dst_mat * neg_adj < threshold).float().sum() / (neg_adj.sum() + 1e-12)
+    tn = ((dst_mat > threshold) * pos_adj).float().sum() / (pos_adj.sum() + 1e-12)
+    fp = ((dst_mat < threshold) * neg_adj).float().sum() / (neg_adj.sum() + 1e-12)
     return tn, fp
     
 def triplet_l2(anchor, positive, negative, margin):
@@ -80,7 +80,7 @@ def liftstr_l2(fts, labels, margin):
     dst_mat = torch.norm(fts.unsqueeze(1).expand([B, B, L]) - fts.unsqueeze(0).expand([B, B, L]), p=2, dim=-1)
     
     pos_loss = dst_mat * adj_mat
-    neg_loss = torch.log(torch.exp(margin - dst_mat * (1 - adj_mat)))
+    neg_loss = torch.log(1 + torch.exp(margin - dst_mat * (1 - adj_mat)))
     loss = (pos_loss + neg_loss).mean() / 2
     
     threshold  = pair_thres(dst_mat, adj_mat)
