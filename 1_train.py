@@ -72,14 +72,14 @@ def train(args, basedir, model, train_dataset, valid_dataset, loss_fn, writer):
     valid_dl = DataLoader(valid_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
     optimizer = torch.optim.Adam(params)
     
-    t_ema = EMA(0.99)
+    t_ema = EMA(0.95)
     flipper = RandomHorizontalFlip(p=1.0)
     
     if args.aug:
         aug_warpper =  transforms.Compose([
-            transforms.RandomAffine(degrees=20, scale=(0.9, 1.1), shear=10),
+            transforms.RandomAffine(degrees=10, scale=(0.95, 1.05), shear=5),
             transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, hue=0.1),
-            transforms.RandomErasing(scale=(0.02, 0.16))
+            # transforms.RandomErasing(scale=(0.02, 0.05))
         ])
     else:
         aug_warpper = lambda x: x
@@ -109,10 +109,6 @@ def train(args, basedir, model, train_dataset, valid_dataset, loss_fn, writer):
                 faces_anc = aug_warpper(faces_anc)
                 faces_pos = aug_warpper(faces_pos)
                 faces_neg = aug_warpper(faces_neg)
-                
-                # faces_anc = faces_anc + torch.normal(mean=0.0, std=0.02, size=faces_anc.shape, device=args.device)
-                # faces_pos = faces_pos + torch.normal(mean=0.0, std=0.02, size=faces_pos.shape, device=args.device)
-                # faces_neg = faces_neg + torch.normal(mean=0.0, std=0.02, size=faces_neg.shape, device=args.device)
                 
                 faces_anc, faces_pos, faces_neg = torch.clamp(faces_anc, 0, 1), torch.clamp(faces_pos, 0, 1), torch.clamp(faces_neg, 0, 1)
             
@@ -153,9 +149,9 @@ def train(args, basedir, model, train_dataset, valid_dataset, loss_fn, writer):
                     writer.add_scalar("hparam/margin", margin, step)
                     
                 if i_batch % 50 == 0:
-                    writer.add_image("train/image/anc", faces_anc[0].detach().cpu().numpy().transpose((2, 0, 1)), step)
-                    writer.add_image("train/image/pos", faces_pos[0].detach().cpu().numpy().transpose((2, 0, 1)), step)
-                    writer.add_image("train/image/neg", faces_neg[0].detach().cpu().numpy().transpose((2, 0, 1)), step)
+                    writer.add_image("train/image/anc", faces_anc[0].detach().cpu().numpy(), step)
+                    writer.add_image("train/image/pos", faces_pos[0].detach().cpu().numpy(), step)
+                    writer.add_image("train/image/neg", faces_neg[0].detach().cpu().numpy(), step)
                     
                     tqdm.write(f"\tLoss: {loss.item():.4f}, Margin: {margin:.4f}, Threshold: {threshold:.4f}, tn: {tn:.4f}, fp: {fp:.4f}")
                 
