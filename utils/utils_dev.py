@@ -8,7 +8,7 @@ import torch
 def get_args():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--batch_size", default=128, type=int)
+    parser.add_argument("--batch_size", default=4, type=int)
     parser.add_argument("--epochs", default=180, type=int)
 
     parser.add_argument("--H", default=128, type=int)

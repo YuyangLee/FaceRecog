@@ -73,7 +73,8 @@ class Faces(Dataset):
         idx_pos, idx_neg = self._get_triplet(index)
         img_pos = self.get_image(idx_pos).clone().to(self.device)
         img_neg = self.get_image(idx_neg).clone().to(self.device)
-        return img_anc, img_pos, img_neg, torch.tensor(index).to(self.device), torch.tensor(idx_pos).to(self.device), torch.tensor(idx_neg).to(self.device)
+        label_anc, label_pos, label_neg = torch.tensor(self.idx_to_label[index]).to(self.device), torch.tensor(self.idx_to_label[idx_pos]).to(self.device), torch.tensor(self.idx_to_label[idx_neg]).to(self.device)
+        return img_anc, img_pos, img_neg, label_anc, label_pos, label_neg
     
     def _train_getitem_pair(self, index):
         """
@@ -82,7 +83,8 @@ class Faces(Dataset):
         img = self.get_image(index).clone().to(self.device)
         idx_pos = self._get_pos_cp(index)
         img_pos = self.get_image(idx_pos).clone().to(self.device)
-        return img, img_pos, torch.tensor(index).to(self.device), torch.tensor(idx_pos).to(self.device)
+        label_0, label_1 = torch.tensor(self.idx_to_label[index]).to(self.device), torch.tensor(self.nameidx_to_label_to_label[idx_pos]).to(self.device)
+        return img, img_pos, label_0, label_1
     
     def valid_getitem(self, index):
         img_i, img_j, label = self.all_data[index]
@@ -141,6 +143,7 @@ class Faces(Dataset):
         self.idx_to_name = []
         self.name_to_idx = defaultdict(list)
         self.name_to_label = {}
+        self.idx_to_label = []
         
         meta = json.load(open(os.path.join(self.base_dir, "bb.json"), 'r'))
         names = json.load(open(os.path.join(self.base_dir, "train.json"), 'r'))
@@ -159,6 +162,7 @@ class Faces(Dataset):
                     print(f"\tSkipped { aligned_img_file } because of error values in rectangle.")
                     continue
                 
+                self.idx_to_label.append(i_name)
                 aligned_file_path = os.path.join(self.base_dir, name, "aligned", aligned_img_file)
                 
                 self.name_to_idx[name].append(len(self.idx_to_name))

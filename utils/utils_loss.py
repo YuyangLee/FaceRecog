@@ -20,8 +20,10 @@ def pair_thres(dst_mat, adj_mat):
     return threshold
 
 def pair_acc(dst_mat, adj_mat, threshold):
-    tn = (dst_mat * adj_mat       > threshold).float().sum() /        adj_mat.sum()
-    fp = (dst_mat * (1 - adj_mat) < threshold).float().mean() / (1 - adj_mat).sum()
+    pos_adj = torch.triu(    adj_mat, diagonal=1)
+    neg_adj = torch.triu(1 - adj_mat, diagonal=1)
+    tn = (dst_mat * pos_adj > threshold).float().sum() / (pos_adj.sum() + 1e-12)
+    fp = (dst_mat * neg_adj < threshold).float().sum() / (neg_adj.sum() + 1e-12)
     return tn, fp
     
 def triplet_l2(anchor, positive, negative, margin):
