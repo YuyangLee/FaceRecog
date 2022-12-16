@@ -26,7 +26,7 @@ class Faces(Dataset):
     def __init__(self,
                 base_dir,
                 batch_size=16, H=64, W=64,
-                mode='train', train_extractor='triplet', force_pos_max=16,
+                mode='train', train_extractor='triplet',
                 lazy=False, preload_device='cpu', device='cuda'
                 ):
         super().__init__()
@@ -47,11 +47,12 @@ class Faces(Dataset):
         self.aligned_images = []
         
         if mode == 'train':
-            self._getitem = {
-                'triplet': self.train_getitem_triplet,
-                'single': self.train_getitem_single,
-                'single_force_pos': self.train_getitem_single_force_pos
-            }[train_extractor]
+            if train_extractor == 'triplet':
+                self._getitem = self._train_getitem_triplet
+            elif train_extractor == 'pair':
+                self._getitem = self._train_getitem_pair
+            else:
+                raise NotImplementedError("Extractor not implemented.")
             self.train_load(base_dir)
         elif mode == 'valid':
             self._getitem = self.valid_getitem
@@ -67,25 +68,21 @@ class Faces(Dataset):
     def __getitem__(self, index):
         return self._getitem(index)
         
-    def train_getitem_triplet(self, index):
+    def _train_getitem_triplet(self, index):
         img_anc = self.get_image(index).clone().to(self.device)
-        pos_idx, neg_idx = self.get_triplet(index)
-        pos_img = self.get_image(pos_idx).clone().to(self.device)
-        neg_img = self.get_image(neg_idx).clone().to(self.device)
-        return img_anc, pos_img, neg_img, torch.tensor(index).to(self.device), torch.tensor(pos_idx).to(self.device), torch.tensor(neg_idx).to(self.device)
+        idx_pos, idx_neg = self._get_triplet(index)
+        img_pos = self.get_image(idx_pos).clone().to(self.device)
+        img_neg = self.get_image(idx_neg).clone().to(self.device)
+        return img_anc, img_pos, img_neg, torch.tensor(index).to(self.device), torch.tensor(idx_pos).to(self.device), torch.tensor(idx_neg).to(self.device)
     
-    def train_getitem_single(self, index):
+    def _train_getitem_pair(self, index):
+        """
+        Get item for pair-based methods, returns a positive pair with name index as labels.
+        """
         img = self.get_image(index).clone().to(self.device)
-        label = torch.tensor(self.name_to_label[index], dtype=int, device=self.device)
-        return img, label
-    
-    def train_getitem_single_force_pos(self, index):
-        idxs = self.name_to_idx[self.idx_to_name[index]]
-        n_pos = min(len(idxs), self.force_pos_max)
-        pos_idxs = random.sample
-        img = self.get_image(index).clone().to(self.device)
-        label = torch.tensor(self.name_to_label[index], dtype=int, device=self.device)
-        return img, label
+        idx_pos = self._get_pos_cp(index)
+        img_pos = self.get_image(idx_pos).clone().to(self.device)
+        return img, img_pos, torch.tensor(index).to(self.device), torch.tensor(idx_pos).to(self.device)
     
     def valid_getitem(self, index):
         img_i, img_j, label = self.all_data[index]
@@ -98,7 +95,13 @@ class Faces(Dataset):
         image_1 = self.get_images(2 * index + 1).clone().to(self.device)
         return image_0, image_1
     
-    def get_triplet(self, index):
+    def _get_pos_cp(self, index):
+        name = self.idx_to_name[index]
+        person_idxs = self.name_to_idx[name]
+        pos_idx = random.choice(person_idxs)
+        return pos_idx
+    
+    def _get_triplet(self, index):
         name = self.idx_to_name[index]
         person_idxs = self.name_to_idx[name]
         pos_idx = random.choice(person_idxs)
