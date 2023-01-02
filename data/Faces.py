@@ -72,8 +72,8 @@ class Faces(Dataset):
         idx_pos, idx_neg = self._get_triplet(index)
         img_pos = self.get_image(idx_pos).clone()
         img_neg = self.get_image(idx_neg).clone()
-        label_anc, label_pos, label_neg = torch.tensor(self.idx_to_label[index]), torch.tensor(self.idx_to_label[idx_pos]), torch.tensor(self.idx_to_label[idx_neg])
-        return img_anc, img_pos, img_neg, label_anc, label_pos, label_neg
+        i_anc, i_pos, i_neg = torch.tensor(index), torch.tensor(idx_pos), torch.tensor(idx_neg)
+        return img_anc, img_pos, img_neg, i_anc, i_pos, i_neg
     
     def _train_getitem_pair(self, index):
         """
@@ -83,7 +83,8 @@ class Faces(Dataset):
         idx_pos = self._get_pos_cp(index)
         img_pos = self.get_image(idx_pos).clone()
         label_0, label_1 = torch.tensor(self.idx_to_label[index]), torch.tensor(self.idx_to_label[idx_pos])
-        return img, img_pos, label_0, label_1
+        same_flag = torch.tensor(index == idx_pos, device=self.device, dtype=torch.bool)
+        return img, img_pos, label_0, label_1, same_flag
     
     def valid_getitem(self, index):
         img_i, img_j, label = self.all_data[index]
@@ -92,8 +93,8 @@ class Faces(Dataset):
         return img_0, img_1, label
     
     def test_getitem(self, index):
-        image_0 = self.get_images(2 * index    ).clone()
-        image_1 = self.get_images(2 * index + 1).clone()
+        image_0 = self.get_image(2 * index    ).clone()
+        image_1 = self.get_image(2 * index + 1).clone()
         return image_0, image_1
     
     def _get_pos_cp(self, index):
@@ -140,9 +141,8 @@ class Faces(Dataset):
         self.base_dir = os.path.join(base_dir, "training_set")
         
         self.idx_to_name = []
-        self.name_to_idx = defaultdict(list)
-        self.name_to_label = {}
         self.idx_to_label = []
+        self.name_to_idx = defaultdict(list)
         
         meta = json.load(open(os.path.join(self.base_dir, "bb.json"), 'r'))
         names = json.load(open(os.path.join(self.base_dir, "train.json"), 'r'))
@@ -151,7 +151,6 @@ class Faces(Dataset):
             
         for i_name, (name, metadata) in enumerate(meta.items()):
             aligned_img_files = metadata['pics_aligned']
-            self.name_to_label[name] = i_name
             
             # Prepare lists for data
             for i_file, aligned_img_file in enumerate(aligned_img_files):
@@ -161,12 +160,11 @@ class Faces(Dataset):
                     print(f"\tSkipped { aligned_img_file } because of error values in rectangle.")
                     continue
                 
-                self.idx_to_label.append(i_name)
-                aligned_file_path = os.path.join(self.base_dir, name, "aligned", aligned_img_file)
-                
                 self.name_to_idx[name].append(len(self.idx_to_name))
                 self.idx_to_name.append(name)
+                self.idx_to_label.append(i_name)
                 
+                aligned_file_path = os.path.join(self.base_dir, name, "aligned", aligned_img_file)
                 self._load_image(aligned_file_path, rectangle, len(self.idx_to_name) - 1)
                     
         self.len = len(self.idx_to_name)

@@ -16,9 +16,9 @@ def get_args():
     
     # Dataset
     parser.add_argument("--lazy_load", action="store_true")
-    parser.add_argument("--num_workers", default=16, type=int)
+    parser.add_argument("--num_workers", default=4, type=int)
     
-    parser.add_argument("--margin", default=0.20, type=float)
+    parser.add_argument("--margin", default=0.5, type=float)
     parser.add_argument("--margin_warmup", action="store_true")
     parser.add_argument("--margin_warmup_steps", default=5000, type=int)
     parser.add_argument("--t_ema", action="store_true")
@@ -26,7 +26,9 @@ def get_args():
     
     parser.add_argument("--max_grad_norm", default=5.0, type=float)
 
-    parser.add_argument("--loss", default="liftstr_l2", type=str)
+    parser.add_argument("--loss", default="triplet", type=str)
+    parser.add_argument("--dist_metric", default="l2", type=str)
+    # parser.add_argument("--loss", default="liftstr_l2", type=str)
     parser.add_argument("--backbone", default="resnet_50", type=str)
 
     parser.add_argument("--checkpoint", default=None, type=str)

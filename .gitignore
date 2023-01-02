@@ -10,3 +10,6 @@ data/training_set/*
 thirdparty/
 results/
 debug/
+
+viz/tsne
+labels*
