@@ -75,7 +75,7 @@ n_img = []
 pos_candidates = []
 neg_candidates = []
 
-n_pos, n_neg_cand = 300, 60
+n_pos, n_neg_cand = 500, 60
 
 for person in person_list:
     person_dir = os.path.join(training_dir, person)
@@ -114,7 +114,6 @@ for person in person_list:
         n_pairs = min(len(image_list), len(neg_candidates))
         
         neg_list = [ [[person, img], neg_img, 0] for img, neg_img in zip(image_list[:n_pairs], neg_candidates[:n_pairs]) ]
-        
         split['valid'] += pos_list
         split['valid'] += neg_list
         n_pos -= len(pos_list)
@@ -131,6 +130,12 @@ for (p1, _), (p2, _), _ in split['valid']:
     if p2 in split['train']:
         print(p2)
         split['train'].remove(p2)
+        
+# valid_pos = [v for v in split['valid'] if v[-1] == 1]
+# valid_neg = [v for v in split['valid'] if v[-1] == 0]
+
+# random.shuffle(valid_neg)
+# split['valid'] = valid_pos + valid_neg[:len(valid_pos)]
         
 print(len(split['train']))
 print(len(split['valid']))

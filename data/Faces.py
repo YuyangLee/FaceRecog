@@ -47,7 +47,7 @@ class Faces(Dataset):
         
         if mode == 'train':
             if train_extractor == 'triplet':
-                self._getitem = self._train_getitem_triplet
+                self._getitem = self._train_getitem_tri
             elif train_extractor == 'pair':
                 self._getitem = self._train_getitem_pair
             else:
@@ -67,7 +67,7 @@ class Faces(Dataset):
     def __getitem__(self, index):
         return self._getitem(index)
         
-    def _train_getitem_triplet(self, index):
+    def _train_getitem_tri(self, index):
         img_anc = self.get_image(index).clone()
         idx_pos, idx_neg = self._get_triplet(index)
         img_pos = self.get_image(idx_pos).clone()

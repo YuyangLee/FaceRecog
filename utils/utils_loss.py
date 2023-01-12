@@ -6,11 +6,7 @@ def l2_dist(ft0, ft1):
     return torch.norm(ft0 - ft1, dim=-1)
 
 def cos_dist(ft0, ft1):
-    return 1 - torch.cosine_similarity(ft0, ft1, dim=-1)
-
-def triplet_thres(anchor, positive, negative):
-    threshold = (torch.norm(positive - anchor, dim=-1).max() + torch.norm(negative - anchor, dim=-1).min()) / 2
-    return threshold
+    return 1 - torch.cosine_similarity(ft0, ft1, dim=-1, eps=1e-12)
 
 def triplet_acc(anchor, positive, negative, threshold):
     dist_ap = torch.norm(anchor - positive, dim=-1)
@@ -30,7 +26,6 @@ def pair_acc(dst_mat, adj_mat, threshold):
     neg_adj = torch.triu(1 - adj_mat, diagonal=1)
     tn = ((dst_mat > threshold) * pos_adj).float().sum() / (pos_adj.sum() + 1e-12)
     fp = ((dst_mat < threshold) * neg_adj).float().sum() / (neg_adj.sum() + 1e-12)
-    return tn, fp
     
 def get_loss(loss='triplet', metric='l2'):
     if metric == 'l2':
@@ -40,16 +35,27 @@ def get_loss(loss='triplet', metric='l2'):
     else:
         raise NotImplementedError("Metric not implemented.")
     
-    if loss == 'triplet':
+    if loss == 'triplet_weak':
         def loss_fn(anchor, positive, negative, margin):
             dist_ap = dist_fn(anchor, positive)
             dist_an = dist_fn(anchor, negative)
             loss = torch.relu(dist_ap - dist_an + margin)
             
-            threshold = (dist_fn(anchor, positive).max() + dist_fn(anchor, negative).min()) / 2
-            tn, fp = triplet_acc(anchor, positive, negative, threshold)
+            return loss
+    
+    elif loss == 'triplet':
+        def loss_fn(anchor, positive, labels_anc, labels_pos, margin):
+            B, L = anchor.shape
+            pos_dist = dist_fn(anchor, positive)
             
-            return loss, threshold, tn, fp
+            _lables = torch.cat([labels_anc, labels_pos], dim=0)
+            _fts = torch.cat([anchor, positive], dim=0)
+            neg_adj_mat = (labels_anc.unsqueeze(1).expand([B, 2*B]) != _lables.unsqueeze(0).expand([B, 2*B])).float()
+            neg_dist = dist_fn(anchor.unsqueeze(1).expand([B, 2*B, L]), _fts.unsqueeze(0).expand([B, 2*B, L])) * neg_adj_mat + 1e6 * (1 - neg_adj_mat)
+            neg_dist_min = neg_dist.min(dim=1)[0]
+            loss = torch.relu((pos_dist - neg_dist_min) * 1000 + margin) # + 0.1 * pos_dist
+            
+            return loss * 10
     
     elif loss == 'pairwise':
         def loss_fn(fts, labels, margin):
@@ -62,7 +68,7 @@ def get_loss(loss='triplet', metric='l2'):
                 margin: scalar
             """
             B, L = fts.shape
-            adj_mat = (labels.unsqueeze(2).expand([B, B]) == labels.unsqueeze(1).expand([B, B])).float()
+            adj_mat = (labels.unsqueeze(1).expand([B, B]) == labels.unsqueeze(0).expand([B, B])).float()
             pos_adj = torch.triu(    adj_mat, diagonal=1)
             neg_adj = torch.triu(1 - adj_mat, diagonal=1)
             
@@ -72,37 +78,26 @@ def get_loss(loss='triplet', metric='l2'):
             neg_loss = torch.relu(margin - dst_mat * neg_adj)
             loss = (pos_loss + neg_loss).mean() # No need to /2 for we have processed the symm adjaceny matrix
             
-            threshold  = pair_thres(dst_mat, adj_mat)
-            tn = ((dst_mat > threshold) * pos_adj).float().sum() / (pos_adj.sum() + 1e-12)
-            fp = ((dst_mat < threshold) * neg_adj).float().sum() / (neg_adj.sum() + 1e-12)
-            
-            return loss, threshold, tn, fp
+            return loss
     
     elif loss == 'liftstr':
-        def loss_fn(fts, labels, margin):
+        def loss_fn(anc, pos, labels_0, labels_1, margin):
             """
             Smoothed Lifted Structured Loss, see https://arxiv.org/abs/1511.06452
-            Args:
-                fts: B x L
-                labels: B
-                margin: scalar
             """
-            B, L = fts.shape
-            adj_mat = (labels.unsqueeze(1).expand([B, B]) == labels.unsqueeze(0).expand([B, B])).float()
-            pos_adj = torch.triu(    adj_mat, diagonal=1)
-            neg_adj = torch.triu(1 - adj_mat, diagonal=1)
+            B, L = anc.shape
+            cp_fts, cp_labels = torch.cat([anc, pos], dim=0), torch.cat([labels_0, labels_1], dim=0)
+            an_adj = (labels_0.unsqueeze(1).expand([B, 2*B]) != cp_labels.unsqueeze(0).expand([B, 2*B])).float()
+            pn_adj = (labels_1.unsqueeze(1).expand([B, 2*B]) != cp_labels.unsqueeze(0).expand([B, 2*B])).float()
             
-            dst_mat = dist_fn(fts.unsqueeze(1).expand([B, B, L]), fts.unsqueeze(0).expand([B, B, L]))
+            an_dist = dist_fn(anc.unsqueeze(1).expand([B, 2*B, L]), cp_fts.unsqueeze(0).expand([B, 2*B, L])) * an_adj
+            pn_dist = dist_fn(pos.unsqueeze(1).expand([B, 2*B, L]), cp_fts.unsqueeze(0).expand([B, 2*B, L])) * pn_adj
+            ap_dist = dist_fn(anc, pos)
             
-            pos_loss = dst_mat * adj_mat
-            neg_loss = torch.log(torch.exp(margin - dst_mat * (1 - adj_mat)))
-            loss = torch.relu(pos_loss + neg_loss).mean() / 2
+            neg_dist_loss = (torch.exp(-an_dist + margin) + torch.exp(-pn_dist + margin)).sum(dim=-1)
+            loss = torch.relu(torch.log(neg_dist_loss)).mean() + ap_dist.mean()
             
-            threshold  = pair_thres(dst_mat, adj_mat)
-            tn = ((dst_mat > threshold) * pos_adj).float().sum() / (pos_adj.sum() + 1e-12)
-            fp = ((dst_mat < threshold) * neg_adj).float().sum() / (neg_adj.sum() + 1e-12)
-            
-            return loss, threshold, tn, fp
+            return loss
         
     else:
         raise NotImplementedError("Loss not implemented.")

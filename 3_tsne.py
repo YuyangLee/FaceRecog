@@ -59,10 +59,10 @@ with torch.no_grad():
     df_tsne.head()
 
     fig, ax = plt.subplots()
-    plt.figure(figsize=(16, 16)) 
+    plt.figure(figsize=(21, 9)) 
     sns.scatterplot(data=df_tsne, hue='Person', x='Dim1', y='Dim2') 
     
-    plt.savefig(f"{outdir}/tsne.png")
+    plt.savefig(f"{outdir}/tsne.pdf")
     
     # img_size = 1.0
     # viz_img = viz_resize_transforms(images).permute(0, 2, 3, 1).cpu().numpy()

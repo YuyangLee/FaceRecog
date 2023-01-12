@@ -18,10 +18,10 @@ from utils.EMA import EMA
 from utils.utils_dev import set_seed, get_args, has_nan
 from utils.utils_loss import get_loss
 import torch.multiprocessing as mp
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, StepLR, CosineAnnealingLR
 
-t_ema = EMA(0.95)
 
-def triplet_based_forward(args, model, data, aug_warpper, self_flipper, loss_fn, margin, require_image=False):
+def tripair_based_forward(args, model, data, aug_warpper, self_flipper, loss_fn, margin, require_image=False):
     faces_anc, faces_pos, faces_neg, idx_anc, idx_pos, idx_neg = data
     faces_anc, faces_pos, faces_neg = faces_anc.permute(0, 3, 1, 2), faces_pos.permute(0, 3, 1, 2), faces_neg.permute(0, 3, 1, 2)
     
@@ -46,27 +46,17 @@ def triplet_based_forward(args, model, data, aug_warpper, self_flipper, loss_fn,
     ft_pos = model(faces_pos)
     ft_neg = model(faces_neg)
     
-    loss_t, threshold, tn, fp = loss_fn(ft_anc, ft_pos, ft_neg, margin=margin)
+    loss_t = loss_fn(ft_anc, ft_pos, ft_neg, margin=margin)
     loss_n = (torch.norm(ft_anc, dim=-1) - 1).pow(2) + (torch.norm(ft_pos, dim=-1) - 1).pow(2) + (torch.norm(ft_neg, dim=-1) - 1).pow(2)
-    loss_n = torch.clamp(loss_n, 0, 2.0)
-    # loss_r = torch.tensor([p.pow(2.0).sum() for p in model.parameters()], device=args.device).mean()
-    
-    loss = 10 * loss_t.mean() + loss_n.mean() # + 0.001 * loss_r
-    
-    if t_ema is not None:
-        t_ema.update(threshold.item())
-        threshold = t_ema.value()
+    loss = loss_t.mean() + 0.1 * loss_n.mean()
     
     res = {
         "loss": loss,
         "stat": {
-            "hparam/threshold": threshold,
             "train/margin": margin,
             "train/triplet_loss": loss_t.mean(),
             "train/norm_loss": loss_n.mean(),
             "train/loss": loss,
-            "train/tn": tn,
-            "train/fp": fp,
         },
     }
     if require_image:
@@ -75,7 +65,7 @@ def triplet_based_forward(args, model, data, aug_warpper, self_flipper, loss_fn,
             "train/image/pos": faces_pos[0].detach().cpu().numpy(),
             "train/image/neg": faces_neg[0].detach().cpu().numpy()
         }
-    return res, threshold
+    return res
 
 def pair_based_forward(args, model, data, aug_warpper, self_flipper, loss_fn, margin, require_image=False):
     face_0, face_1, label_0, label_1, same_flag = data
@@ -90,46 +80,34 @@ def pair_based_forward(args, model, data, aug_warpper, self_flipper, loss_fn, ma
         face_0 = torch.clamp(aug_warpper(face_0), 0., 1.)
         face_1 = torch.clamp(aug_warpper(face_1), 0., 1.)
     
-    faces, labels = torch.cat([face_0, face_1], dim=0), torch.cat([label_0, label_1], dim=0)
-    fts = model(faces)
+    fts_0, fts_1 = model(face_0), model(face_1)
     
-    loss_p, threshold, tn, fp = loss_fn(fts, labels, margin=margin)
-    loss_n = (torch.norm(fts, dim=-1) - 1).pow(2).mean()
-    loss_n = torch.clamp(loss_n, 0, 2.0)
-    # loss_r = torch.tensor([p.pow(2.0).sum() for p in model.parameters()], device=args.device).mean()
-    
-    loss = 10.0 * loss_p.mean() + loss_n.mean() # + 0.001 * loss_r
-    
-    if has_nan(loss):
-        raise NotImplementedError()
-    
-    if t_ema is not None:
-        t_ema.update(threshold.item())
-        threshold = t_ema.value()
-    
+    loss_p = loss_fn(fts_0, fts_1, label_0, label_1, margin=margin)
     res = {
-        "loss": loss,
         "stat": {
-            "hparam/threshold": threshold,
             "train/margin": margin,
             "train/pair_loss": loss_p.mean(),
-            "train/norm_loss": loss_n.mean(),
-            "train/loss": loss,
-            "train/tn": tn,
-            "train/fp": fp,
         }
     }
+    
+    loss = loss_p.mean()
+    
+    if not args.no_fnl:
+        loss_n = (torch.norm(torch.cat([fts_0, fts_1], dim=0), dim=-1) - 1).pow(2).mean()
+        res['stat']['train/norm_loss'] = loss_n
+        loss = loss + 0.1 * loss_n
+    
+    res["loss"] = loss
+    res['stat']['train/loss'] = loss
     
     if require_image:
         res['images'] = {
             "train/image/face_0": face_0[0].detach().cpu().numpy(),
             "train/image/face_1": face_1[0].detach().cpu().numpy(),
         }
-    return res, threshold
+    return res
 
 def train(args, basedir, model, train_dataset, valid_dataset, frw_fn, loss_fn, writer):
-    params = [{ 'params': model.parameters(), 'lr': 1e-3 }]
-    
     margin = torch.tensor(args.margin).to(args.device)
     if args.margin_warmup:
         get_margin = lambda x: (min(2.0, 1 + x / args.margin_warmup_steps)) * args.margin / 2
@@ -138,19 +116,21 @@ def train(args, basedir, model, train_dataset, valid_dataset, frw_fn, loss_fn, w
     
     train_dl = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
     valid_dl = DataLoader(valid_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
-    optimizer = torch.optim.Adam(params)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-3)
+    # scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=10, T_mult=2, eta_min=0, last_epoch=-1)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-5)
     
     flipper = RandomHorizontalFlip(p=1.0)
     aug_transforms = transforms.Compose([
         transforms.RandomApply([transforms.GaussianBlur(15, 1.0)], p=0.1),
         transforms.RandomAffine(degrees=10, scale=(0.95, 1.05), shear=5),
         transforms.RandomGrayscale(p=0.25),
-        transforms.RandomApply([transforms.ColorJitter(brightness=0.2, contrast=0.1, saturation=0.1, hue=0.1)], p=0.5),
+        transforms.RandomApply([transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, hue=0.1)], p=0.5),
         # transforms.RandomErasing(scale=(0.02, 0.05)),
         transforms.Normalize(mean=(0.485, 0.456, 0.406), std=[0.2, 0.2, 0.2]),
     ])
     norm_transforms = transforms.Compose([
-        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.2, 0.2, 0.2]),
+        transforms.Normalize(mean=(0.485, 0.456, 0.406), std=[0.2, 0.2, 0.2])
     ])
 
     aug_warpper = aug_transforms if args.aug else norm_transforms
@@ -158,16 +138,16 @@ def train(args, basedir, model, train_dataset, valid_dataset, frw_fn, loss_fn, w
     step = 0
     for epoch in range(args.epochs):
         tqdm.write(f"Epoch: { epoch }")
+        scheduler.step()
         
         margin = get_margin(step)
         model.train()
         for i_batch, data in enumerate(tqdm(train_dl)):
             optimizer.zero_grad()
             data = [d.to(args.device) for d in data]
-            
             require_image = i_batch == 0
             
-            res, threshold = frw_fn(args, model, data, aug_warpper, flipper, loss_fn, margin, require_image)
+            res = frw_fn(args, model, data, aug_warpper, flipper, loss_fn, margin, require_image)
             
             loss, stat = res['loss'], res['stat']
             loss.backward()
@@ -175,22 +155,21 @@ def train(args, basedir, model, train_dataset, valid_dataset, frw_fn, loss_fn, w
             optimizer.step()
             
             if i_batch % 10 == 0:
+                writer.add_scalar("train/epoch", epoch, step)
                 for k, v in stat.items():
                     writer.add_scalar(k, v, step)
                 
-                tn, fp = res['stat']['train/tn'], res['stat']['train/fp']
-                tqdm.write(f"\tLoss: {loss.item():.4f}, Margin: {margin:.4f}, Threshold: {threshold:.4f}, tn: {tn:.4f}, fp: {fp:.4f}")
+                tqdm.write(f"\tLoss: {loss.item():.4f}, Margin: {margin:.4f}")
                 
             if require_image:
                 for k, v in res['images'].items():
                     writer.add_image(k, v, step)
             step += 1
             
-        if epoch % 5 == 4:
+        if epoch % 5 == 0:
             with torch.no_grad():
                 model.eval()
-                tns, fps, accs = [], [], []
-                labels = []
+                dists, thres, labels = [], [], []
                 for i_batch, data in enumerate(tqdm(valid_dl)):
                     data = [d.to(args.device) for d in data]
                     faces_0, faces_1, label = data
@@ -200,35 +179,44 @@ def train(args, basedir, model, train_dataset, valid_dataset, frw_fn, loss_fn, w
                     
                     ft_0, ft_1 = model(faces_0), model(faces_1)
                     
-                    dist = torch.norm(ft_0 - ft_1, dim=-1)
-                    pred_1 = (dist < threshold).float()
-                    pred_0 = 1 - pred_1
+                    if args.dist_metric == 'cos':
+                        dist = 1 - torch.cosine_similarity(ft_0, ft_1, dim=-1)
+                        test_threshold = torch.linspace(0.0, 2.0, steps=100, device=args.device)
+                    elif args.dist_metric == 'l2':
+                        dist = torch.norm(ft_0 - ft_1, dim=-1)
+                        test_threshold = torch.linspace(0, 5.0, steps=100, device=args.device)
+                        
+                    _label = label.unsqueeze(1).tile([1, 100])
+                    _dist = dist.unsqueeze(1).tile([1, 100])
+                    _pred = (_dist < test_threshold.unsqueeze(0).tile([_dist.shape[0], 1])).float()
+                    _acc = (_pred == _label).float().mean(dim=0)
+                    opt_thr = test_threshold[_acc.argmax()].item()
                     
-                    tn = pred_0 * label
-                    fp = pred_1 * (1 - label)
-                    acc = ((pred_1 * label) + pred_0 * (1 - label))
-                    
-                    tns.append(tn)
-                    fps.append(fp)
-                    accs.append(acc)
+                    dists.append(dist)
                     labels.append(label)
+                    thres.append(opt_thr)
                 
-                fps, tns, accs, labels = torch.cat(fps), torch.cat(tns), torch.cat(accs), torch.cat(labels)
+                dists, labels, thres = torch.cat(dists), torch.cat(labels), torch.tensor(thres).to(args.device).mean().item()
                 
-                fp = fps.sum() / (1 - labels).sum()
-                tn = tns.sum() / labels.sum()
-                acc = accs.mean()
+                pred_1 = (dists < thres).float()
+                pred_0 = 1 - pred_1
                 
+                fn = pred_0 * labels
+                fp = pred_1 * (1 - labels)
+                acc = ((pred_1 * labels) + pred_0 * (1 - labels))
+                fn, fp, acc = fn.mean(), fp.mean(), acc.mean()
+                
+                writer.add_scalar("valid/thr", thres, step)
+                writer.add_scalar("valid/acc", acc, step)
                 writer.add_scalar("valid/f_pos", fp, step)
-                writer.add_scalar("valid/t_neg", tn, step)
-                writer.add_scalar("valid/accuracy", acc.mean(), step)
-                tqdm.write(f"\tThreshold: {threshold:.4f}, Accuracy: {acc:.4f}, tn: {tn:.4f}, fp: {fp:.4f}")
+                writer.add_scalar("valid/f_neg", fn, step)
+                tqdm.write(f"\tThreshold: {thres:.4f} (Optimal: {opt_thr:.4f}), Accuracy: {acc:.4f}, fn: {fn:.4f}, fp: {fp:.4f}")
         
         if epoch % 50 == 9:
             with torch.no_grad():
                 torch.save({
                     "args": args,
-                    "threshold": threshold,
+                    "threshold": thres,
                     "margin": margin,
                     "model": model.state_dict(),
                     "optimizer": optimizer.state_dict(),
@@ -273,7 +261,7 @@ def load_ckpt(path, model, optimizer=None):
 
 if __name__ == '__main__':
     args = get_args()
-    
+        
     set_seed(args.seed)
     
     basedir = "results/" + datetime.now().strftime("%Y-%m-%d/%H-%M-%S") + f"_{ args.tag }"
@@ -282,9 +270,12 @@ if __name__ == '__main__':
     writer = tensorboardX.SummaryWriter(log_dir=basedir)
     recognet = RecogNet(args.H, args.W, len_embedding=256, backbone=args.backbone).to(args.device)
     
-    if args.loss == 'triplet':
-        frw_fn = triplet_based_forward
+    if args.loss == 'triplet_weak':
+        frw_fn = tripair_based_forward
         train_extractor = 'triplet'
+    elif args.loss == 'triplet':
+        frw_fn = pair_based_forward
+        train_extractor = 'pair'
     elif args.loss == 'liftstr':
         frw_fn = pair_based_forward
         train_extractor = 'pair'
