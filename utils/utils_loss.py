@@ -56,7 +56,7 @@ def get_loss(loss='triplet', metric='l2'):
             neg_dist_min = (F.softmin(neg_dist, dim=1) * neg_dist).sum(dim=1)
             loss = torch.relu((pos_dist - neg_dist_min) + margin) # + 0.1 * pos_dist
             
-            return loss * 10
+            return loss * 20
     
     elif loss == 'pairwise':
         def loss_fn(fts, labels, margin):

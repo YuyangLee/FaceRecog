@@ -50,6 +50,8 @@ class Faces(Dataset):
                 self._getitem = self._train_getitem_tri
             elif train_extractor == 'pair':
                 self._getitem = self._train_getitem_pair
+            elif train_extractor == 'single':
+                self._getitem = self._train_getitem_single
             else:
                 raise NotImplementedError("Extractor not implemented.")
             self.train_load(base_dir)
@@ -75,6 +77,10 @@ class Faces(Dataset):
         img_neg = self.get_image(idx_neg).clone()
         i_anc, i_pos, i_neg = torch.tensor(index), torch.tensor(idx_pos), torch.tensor(idx_neg)
         return img_anc, img_pos, img_neg, i_anc, i_pos, i_neg
+    
+    def _train_getitem_single(self, index):
+        img_anc = self.get_image(index).clone()
+        return img_anc
     
     def _train_getitem_pair(self, index):
         """
@@ -212,23 +218,25 @@ class Faces(Dataset):
         pairs = [ str(i) for i in range(600) ]
         
         for pair in pairs:
-            for i_person, person in enumerate(pair):
-                data = []
-                for img in ['A.jpg', 'B.jpg']:
-                    img_i = len(self.aligned_images)
-                    data.append(img_i)
-                    aligned_img_file = os.path.join(self.base_dir, person[0], "aligned", img)
-                    
-                    metadata = meta[person[0]]
-                    if img not in metadata['pics_aligned']:
-                        print(f"Skipped { aligned_img_file } because it is not in the metadata.")
-                        continue
-                    rectangle = metadata['align_params'][img]['rect_aligned']
-                    rectangle = torch.tensor(rectangle, device=self.device)
-                    
-                    # Error bbs are excluded when processing pair lists
-                    self._load_image(aligned_img_file, rectangle, img_i)
+            data = []
+            for img in ['A.jpg', 'B.jpg']:
+                img_i = len(self.aligned_images)
+                data.append(img_i)
+                aligned_img_file = os.path.join(self.base_dir, pair, "aligned", img)
                 
+                metadata = meta[pair]
+                if img not in metadata['pics_aligned']:
+                    print(f"Skipped { aligned_img_file } because it is not in the metadata.")
+                    continue
+                rectangle = metadata['align_params'][img]['rect_aligned']
+                rectangle = torch.tensor(rectangle, device=self.device)
+                
+                if rectangle[0] < 0 or rectangle[1] < 0 or rectangle[2] < 0 or rectangle[3] < 0:
+                    print(aligned_img_file)
+                
+                # Error bbs are excluded when processing pair lists
+                self._load_image(aligned_img_file, rectangle, img_i)
+                                
             self.all_data.append(data)
         self.len = len(self.all_data)
     

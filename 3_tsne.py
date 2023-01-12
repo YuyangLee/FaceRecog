@@ -41,12 +41,11 @@ def prepare_data(n_person):
     return torch.stack(images, dim=0), arab_labels, name_labels
 
 with torch.no_grad():
-    ckpt = "results/2023-01-12/12-35-36_cmp_r18_wa_lsl2/resnet18_159.pth"
+    ckpt = "archive/2023-01-12/2023-01-12/15-50-06_cmp_r18_wa_trl2/resnet18_349.pth"
     
     model = RecogNet(128, 128, len_embedding=256, backbone=os.path.basename(ckpt).split('_')[0]).to(device)
     model.load_state_dict(torch.load(ckpt)['model'])
     images, arab_labels, name_labels = prepare_data(10)
-    
     print(f"t-SNE on {len(arab_labels)} images")
     
     norm_transforms = transforms.Compose([transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.2, 0.2, 0.2])])
@@ -62,10 +61,14 @@ with torch.no_grad():
     df_tsne.head()
 
     fig, ax = plt.subplots()
+    # plt.figure(figsize=(9, 9)) 
     plt.figure(figsize=(21, 9)) 
     sns.scatterplot(data=df_tsne, hue='Person', x='Dim1', y='Dim2') 
     
-    plt.savefig(f"{outdir}/tsne.pdf")
+    # plt.savefig(f"{outdir}/tsne_initial.pdf")
+    # plt.savefig(f"{outdir}/tsne_learned.pdf")
+    plt.savefig(f"{outdir}/tsne_teaser.pdf")
+    
     
     # img_size = 1.0
     # viz_img = viz_resize_transforms(images).permute(0, 2, 3, 1).cpu().numpy()

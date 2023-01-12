@@ -7,7 +7,7 @@ valid_candidate = []
 training_dir = "data/training_set"
 
 # DO NOT CHANGE, OR YOU MAY HAVE MORE IMAGES TO SKIP
-random.seed(42)
+random.seed(43)
 
 split = {
     "train": [],
@@ -75,7 +75,7 @@ n_img = []
 pos_candidates = []
 neg_candidates = []
 
-n_pos, n_neg_cand = 500, 60
+n_pos, n_neg_cand = 500, 50
 
 for person in person_list:
     person_dir = os.path.join(training_dir, person)
@@ -121,6 +121,7 @@ for person in person_list:
     elif not person in pos_candidates:
         split['train'].append(person)
         
+# TODO: Better logic for data efficiency
 for (p1, _), (p2, _), _ in split['valid']:
     # assert p1 in split['train']
     # assert p2 in split['train']

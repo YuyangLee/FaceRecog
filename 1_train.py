@@ -100,8 +100,8 @@ def pair_based_forward(args, model, data, aug_warpper, self_flipper, loss_fn, ma
     
     if require_image:
         res['images'] = {
-            "train/image/face_0": torch.clamp(face_0[0], 0, 1).detach().cpu().numpy(),
-            "train/image/face_1": torch.clamp(face_1[0], 0, 1).detach().cpu().numpy(),
+            "train/image/face_0": (face_0[0] * 0.5 + 0.5).detach().cpu().numpy(),
+            "train/image/face_1": (face_1[0] * 0.5 + 0.5).detach().cpu().numpy(),
         }
     return res
 
@@ -120,15 +120,15 @@ def train(args, basedir, model, train_dataset, valid_dataset, frw_fn, loss_fn, w
     
     flipper = RandomHorizontalFlip(p=1.0)
     aug_transforms = transforms.Compose([
-        transforms.RandomApply([transforms.GaussianBlur(15, 1.0)], p=0.1),
+        transforms.RandomApply([transforms.GaussianBlur(25, 1.0)], p=0.1),
         transforms.RandomAffine(degrees=10, scale=(0.95, 1.05), shear=5),
-        transforms.RandomGrayscale(p=0.25),
-        transforms.RandomApply([transforms.ColorJitter(brightness=0.05, contrast=0.05, saturation=0.05, hue=0.)], p=0.5),
+        transforms.RandomApply([transforms.ColorJitter(brightness=0.2, contrast=0.1, saturation=0.1, hue=0.1)], p=0.5),
         # transforms.RandomErasing(scale=(0.02, 0.05)),
-        transforms.Normalize(mean=(0.485, 0.456, 0.406), std=[0.2, 0.2, 0.2]),
+        transforms.RandomGrayscale(p=0.25),
+        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
     ])
     norm_transforms = transforms.Compose([
-        transforms.Normalize(mean=(0.485, 0.456, 0.406), std=[0.2, 0.2, 0.2])
+        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
     ])
 
     aug_warpper = aug_transforms if args.aug else norm_transforms
@@ -208,7 +208,7 @@ def train(args, basedir, model, train_dataset, valid_dataset, frw_fn, loss_fn, w
                 writer.add_scalar("valid/acc", acc, step)
                 writer.add_scalar("valid/f_pos", fp, step)
                 writer.add_scalar("valid/f_neg", fn, step)
-                tqdm.write(f"\tThreshold: {thres:.4f} (Optimal: {opt_thr:.4f}), Accuracy: {acc:.4f}, fn: {fn:.4f}, fp: {fp:.4f}")
+                tqdm.write(f"\tThreshold: {thres:.4f}, Accuracy: {acc:.4f}, fn: {fn:.4f}, fp: {fp:.4f}")
         
         if epoch % 50 == 49:
             with torch.no_grad():
@@ -284,14 +284,7 @@ if __name__ == '__main__':
         raise NotImplementedError("Loss function not implemented")
     loss_fn = get_loss(args.loss, metric=args.dist_metric)
     
-    if not args.test:
-        with torch.no_grad():
-            train_ds = Faces("data", args.batch_size, args.H, args.W, mode='train', train_extractor=train_extractor, lazy=args.lazy_load, device=args.preload_device)
-            valid_ds = Faces("data", args.batch_size, args.H, args.W, mode='valid', train_extractor=train_extractor,lazy=args.lazy_load, device=args.preload_device)
-        train(args, basedir, recognet, train_ds, valid_ds, frw_fn, loss_fn, writer)
-
-    else:
-        with torch.no_grad():
-            test_ds = Faces("data", args.batch_size, mode='test', lazy=args.lazy_load, preload_device='cuda', device='cuda')
-        test(args, basedir, recognet, test_ds, writer)
-        
+    with torch.no_grad():
+        train_ds = Faces("data", args.batch_size, args.H, args.W, mode='train', train_extractor=train_extractor, lazy=args.lazy_load, device=args.preload_device)
+        valid_ds = Faces("data", args.batch_size, args.H, args.W, mode='valid', train_extractor=train_extractor,lazy=args.lazy_load, device=args.preload_device)
+    train(args, basedir, recognet, train_ds, valid_ds, frw_fn, loss_fn, writer)

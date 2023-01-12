@@ -31,7 +31,9 @@ def get_args():
     parser.add_argument("--train_ratio", default=0.8, type=float)
     
     parser.add_argument("--dist", default="l2", type=str)
-    parser.add_argument("--checkpoint", default="results/2023-01-12/12-35-30_cmp_r18_wa_trl2/resnet18_159.pth", type=str)
+    parser.add_argument("--checkpoint", default="results/2023-01-12/18-26-15_cmp_r34_wa_trl2/resnet34_299.pth", type=str)
+    # parser.add_argument("--backbone", default="vgg11_bn", type=str)
+    parser.add_argument("--backbone", default="resnet34", type=str)
     parser.add_argument("--tag", default="test", type=str)
     
     parser.add_argument("--test", default=True, type=bool)
@@ -50,15 +52,17 @@ def set_seed(seed):
 
 @torch.no_grad() 
 def test(args, basedir, model, test_ds):
-    model.eval()
     threshold = load_ckpt(args.checkpoint, model=model, optimizer=None)
+    model.eval()
     threshold = torch.tensor(threshold).to(args.device)
     
     test_dl = DataLoader(test_ds, batch_size=args.batch_size, drop_last=False, shuffle=False, num_workers=args.num_workers)
     norm_transforms = transforms.Compose([
-        transforms.Normalize(mean=(0.485, 0.456, 0.406), std=[0.2, 0.2, 0.2])
+        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
     ])
     
+    # for thres in [4.7, 4.8, 4.9, 5.0, threshold]:
+    thres = threshold
     manifold_dist, recog_res = [], []
     for i_batch, data in enumerate(tqdm(test_dl)):
         data = [d.to(args.device) for d in data]
@@ -68,10 +72,10 @@ def test(args, basedir, model, test_ds):
         faces_0, faces_1 = faces_0.permute(0, 3, 1, 2), faces_1.permute(0, 3, 1, 2)
         faces_0, faces_1 = norm_transforms(faces_0), norm_transforms(faces_1)
         
-        # if i_batch == 0:
-        #     for i in range(16):
-        #         save_image(faces_0[i], os.path.join(export_dir, f"{i}_A.jpg"))
-        #         save_image(faces_1[i], os.path.join(export_dir, f"{i}_B.jpg"))
+        if i_batch == 0:
+            for i in range(16):
+                save_image(faces_0[i] * 0.5 + 0.5, os.path.join(export_dir, f"{i}_A.jpg"))
+                save_image(faces_1[i] * 0.5 + 0.5, os.path.join(export_dir, f"{i}_B.jpg"))
         
         ft_0 = model(faces_0)
         ft_1 = model(faces_1)
@@ -84,15 +88,19 @@ def test(args, basedir, model, test_ds):
             raise NotImplementedError()
         
         manifold_dist += dist.cpu().numpy().tolist()
-        recog_res += (dist < threshold).int().cpu().numpy().tolist()
-        
+        recog_res += (dist < thres).int().cpu().numpy().tolist()
+            
     # DEBUG
     with open("data/test_label.txt", 'r') as f:
         res = f.readlines()
         res = np.array([ int(r[0]) for r in res ])
         f.close()
     res = (np.array(recog_res) == res).mean()
-    print(res)
+    fp = (np.array(recog_res) * (1 - res)).mean()
+    fn = ((1 - np.array(recog_res)) * res).mean()
+    print("acc: " + str(res))
+    print("fp: " + str(fp))
+    print("fn: " + str(fn))
     # DEBUG
     
     recog_res = "\n".join([str(r) for r in recog_res])
@@ -108,10 +116,11 @@ def test(args, basedir, model, test_ds):
         
 def load_ckpt(path, model, optimizer=None):
     ckpt = torch.load(path)
-    model.load_state_dict(ckpt["model"])
-    threshold = ckpt["threshold"]
+    if model is not None:
+        model.load_state_dict(ckpt["model"])
     if optimizer is not None:
         optimizer.load_state_dict(ckpt["optimizer"])
+    threshold = ckpt["threshold"]
     return threshold
 
 if __name__ == '__main__':
@@ -122,8 +131,7 @@ if __name__ == '__main__':
     basedir = "results/" + datetime.now().strftime("%Y-%m-%d/%H-%M-%S") + f"_{ args.tag }"
     os.makedirs(basedir, exist_ok=True)
     
-    recognet = RecogNet(args.H, args.W, len_embedding=256, backbone=os.path.basename(args.checkpoint).split('_')[0]).to(args.device)
-    threshold = load_ckpt(args.checkpoint, model=recognet, optimizer=None)
+    recognet = RecogNet(args.H, args.W, len_embedding=256, backbone=args.backbone).to(args.device)
     
     with torch.no_grad():
         test_ds = Faces("data", args.batch_size, H=args.H, W=args.W, mode='test', lazy=args.lazy_load, device='cuda')
