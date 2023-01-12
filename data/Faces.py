@@ -25,7 +25,7 @@ import cv2
 class Faces(Dataset):
     def __init__(self,
                 base_dir,
-                batch_size=16, H=64, W=64,
+                batch_size=16, H=128, W=128,
                 mode='train', train_extractor='triplet',
                 lazy=False, device='cpu'
                 ):
@@ -58,6 +58,7 @@ class Faces(Dataset):
             self.valid_load(base_dir)
         elif mode == 'test':
             self._getitem = self.test_getitem
+            self.test_load(base_dir)
         else:
             raise NotImplementedError("Mode not implemented.")
         
@@ -93,8 +94,9 @@ class Faces(Dataset):
         return img_0, img_1, label
     
     def test_getitem(self, index):
-        image_0 = self.get_image(2 * index    ).clone()
-        image_1 = self.get_image(2 * index + 1).clone()
+        i, j = self.all_data[index]
+        image_0 = self.get_image(i).clone()
+        image_1 = self.get_image(j).clone()
         return image_0, image_1
     
     def _get_pos_cp(self, index):
@@ -203,33 +205,30 @@ class Faces(Dataset):
         
     def test_load(self, base_dir):
         self.base_dir = os.path.join(base_dir, "test_pair")
-        self.len = len(self.idx_to_name) / 2    
-    
-        self.base_dir = os.path.join(base_dir, "training_set")
         
         self.all_data = []
         
         meta = json.load(open(os.path.join(self.base_dir, "bb.json"), 'r'))
-        pairs = json.load(open(os.path.join(self.base_dir, "valid.json"), 'r'))
+        pairs = [ str(i) for i in range(600) ]
         
         for pair in pairs:
-            data = []
-            for i_person, person in enumerate(pair[:-1]):
-                img_i = len(self.aligned_images)
-                data.append(img_i)
-                aligned_img_file = os.path.join(self.base_dir, person[0], "aligned", person[1])
+            for i_person, person in enumerate(pair):
+                data = []
+                for img in ['A.jpg', 'B.jpg']:
+                    img_i = len(self.aligned_images)
+                    data.append(img_i)
+                    aligned_img_file = os.path.join(self.base_dir, person[0], "aligned", img)
+                    
+                    metadata = meta[person[0]]
+                    if img not in metadata['pics_aligned']:
+                        print(f"Skipped { aligned_img_file } because it is not in the metadata.")
+                        continue
+                    rectangle = metadata['align_params'][img]['rect_aligned']
+                    rectangle = torch.tensor(rectangle, device=self.device)
+                    
+                    # Error bbs are excluded when processing pair lists
+                    self._load_image(aligned_img_file, rectangle, img_i)
                 
-                metadata = meta[person[0]]
-                if person[1] not in metadata['pics_aligned']:
-                    print(f"Skipped { aligned_img_file } because it is not in the metadata.")
-                    continue
-                rectangle = metadata['align_params'][person[1]]['rect_aligned']
-                rectangle = torch.tensor(rectangle, device=self.device)
-                
-                # Error bbs are excluded when processing pair lists
-                self._load_image(aligned_img_file, rectangle, img_i)
-                
-            data.append(pair[-1])
             self.all_data.append(data)
         self.len = len(self.all_data)
     

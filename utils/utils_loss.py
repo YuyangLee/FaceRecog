@@ -51,9 +51,10 @@ def get_loss(loss='triplet', metric='l2'):
             _lables = torch.cat([labels_anc, labels_pos], dim=0)
             _fts = torch.cat([anchor, positive], dim=0)
             neg_adj_mat = (labels_anc.unsqueeze(1).expand([B, 2*B]) != _lables.unsqueeze(0).expand([B, 2*B])).float()
-            neg_dist = dist_fn(anchor.unsqueeze(1).expand([B, 2*B, L]), _fts.unsqueeze(0).expand([B, 2*B, L])) * neg_adj_mat + 1e6 * (1 - neg_adj_mat)
-            neg_dist_min = neg_dist.min(dim=1)[0]
-            loss = torch.relu((pos_dist - neg_dist_min) * 1000 + margin) # + 0.1 * pos_dist
+            neg_dist = dist_fn(anchor.unsqueeze(1).expand([B, 2*B, L]), _fts.unsqueeze(0).expand([B, 2*B, L])) * neg_adj_mat + 1e12 * (1 - neg_adj_mat)
+            # neg_dist_min = neg_dist.min(dim=1)[0]
+            neg_dist_min = (F.softmin(neg_dist, dim=1) * neg_dist).sum(dim=1)
+            loss = torch.relu((pos_dist - neg_dist_min) + margin) # + 0.1 * pos_dist
             
             return loss * 10
     
@@ -95,9 +96,9 @@ def get_loss(loss='triplet', metric='l2'):
             ap_dist = dist_fn(anc, pos)
             
             neg_dist_loss = (torch.exp(-an_dist + margin) + torch.exp(-pn_dist + margin)).sum(dim=-1)
-            loss = torch.relu(torch.log(neg_dist_loss)).mean() + ap_dist.mean()
+            loss = torch.relu(torch.log(neg_dist_loss) + ap_dist).mean()
             
-            return loss
+            return loss**2 * 0.1
         
     else:
         raise NotImplementedError("Loss not implemented.")

@@ -4,7 +4,7 @@ import torchvision.models as models
 resnet18 = models.resnet18()
 
 class RecogNet(nn.Module):
-    def __init__(self, image_h, image_w, len_embedding=256, backbone='resnet_101'):
+    def __init__(self, image_h, image_w, len_embedding=256, backbone='resnet18'):
         super(RecogNet, self).__init__()
         self.image_h, self.image_w = image_h, image_w
         

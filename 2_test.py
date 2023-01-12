@@ -1,13 +1,13 @@
 import argparse
 import json
 import os
-from datetime import datetime
 import random
+from datetime import datetime
 
 import numpy as np
-import tensorboardX
 import torch
 from torch.utils.data import DataLoader
+from torchvision import transforms
 from torchvision.transforms import RandomHorizontalFlip, RandomRotation
 from torchvision.utils import save_image
 from tqdm import tqdm, trange
@@ -20,8 +20,7 @@ from utils.EMA import EMA
 def get_args():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--batch_size", default=16, type=int)
-    parser.add_argument("--epochs", default=180, type=int)
+    parser.add_argument("--batch_size", default=256, type=int)
 
     parser.add_argument("--H", default=128, type=int)
     parser.add_argument("--W", default=128, type=int)
@@ -31,15 +30,9 @@ def get_args():
     parser.add_argument("--num_workers", default=0, type=int)
     parser.add_argument("--train_ratio", default=0.8, type=float)
     
-    parser.add_argument("--margin", default=0.15, type=float)
-    parser.add_argument("--learnable_margin", action="store_true")
-    parser.add_argument("--t_ema", action="store_true")
-    parser.add_argument("--aug", action="store_true")
-
-    parser.add_argument("--backbone", default="resnet_50", type=str)
-
-    parser.add_argument("--checkpoint", default=None, type=str)
-    parser.add_argument("--tag", default="train", type=str)
+    parser.add_argument("--dist", default="l2", type=str)
+    parser.add_argument("--checkpoint", default="results/2023-01-12/12-35-30_cmp_r18_wa_trl2/resnet18_159.pth", type=str)
+    parser.add_argument("--tag", default="test", type=str)
     
     parser.add_argument("--test", default=True, type=bool)
     parser.add_argument("--device", default="cuda", type=str)
@@ -55,44 +48,61 @@ def set_seed(seed):
     np.random.seed(seed)
     random.seed(seed)
 
-def metric(anchor, positive, negative, threshold):
-    dist_ap = torch.norm(anchor - positive, dim=-1)
-    dist_an = torch.norm(anchor - negative, dim=-1)
-    tn = (dist_ap > threshold).float().mean().item()
-    fp = (dist_an < threshold).float().mean().item()
-    return tn, fp
-
-@torch.jit.script
-def triplet_loss(anchor, positive, negative, margin):
-    dist_ap = torch.norm(anchor - positive, dim=-1)
-    dist_an = torch.norm(anchor - negative, dim=-1)
-    loss = torch.relu(dist_ap - dist_an + margin)
-    return loss
-
 @torch.no_grad() 
-def test(args, basedir, model, test_ds, writer):
+def test(args, basedir, model, test_ds):
     model.eval()
-    margin = load_ckpt(args.checkpoint, model=model, optimizer=None)
-    margin = torch.tensor(margin).to(args.device)
+    threshold = load_ckpt(args.checkpoint, model=model, optimizer=None)
+    threshold = torch.tensor(threshold).to(args.device)
     
     test_dl = DataLoader(test_ds, batch_size=args.batch_size, drop_last=False, shuffle=False, num_workers=args.num_workers)
+    norm_transforms = transforms.Compose([
+        transforms.Normalize(mean=(0.485, 0.456, 0.406), std=[0.2, 0.2, 0.2])
+    ])
     
     manifold_dist, recog_res = [], []
     for i_batch, data in enumerate(tqdm(test_dl)):
-        img_0, img_1 = data
-        ft_0 = model(img_0)
-        ft_1 = model(img_1)
-        dist = torch.norm(ft_0 - ft_1, dim=1)
-        manifold_dist += dist.cpu().numpy().tolist()
-        recog_res += (dist < margin).cpu().numpy().tolist()
+        data = [d.to(args.device) for d in data]
+        faces_0, faces_1 = data
         
-    with open(os.path.join(basedir, "res.txt", 'w')) as f:
-        f.truncate()
+        export_dir = "results/test"
+        faces_0, faces_1 = faces_0.permute(0, 3, 1, 2), faces_1.permute(0, 3, 1, 2)
+        faces_0, faces_1 = norm_transforms(faces_0), norm_transforms(faces_1)
+        
+        # if i_batch == 0:
+        #     for i in range(16):
+        #         save_image(faces_0[i], os.path.join(export_dir, f"{i}_A.jpg"))
+        #         save_image(faces_1[i], os.path.join(export_dir, f"{i}_B.jpg"))
+        
+        ft_0 = model(faces_0)
+        ft_1 = model(faces_1)
+        
+        if args.dist == "l2":
+            dist = torch.norm(ft_0 - ft_1, dim=1)
+        elif args.dist == "cos":
+            dist = 1 - torch.cosine_similarity(ft_0, ft_1)
+        else:
+            raise NotImplementedError()
+        
+        manifold_dist += dist.cpu().numpy().tolist()
+        recog_res += (dist < threshold).int().cpu().numpy().tolist()
+        
+    # DEBUG
+    with open("data/test_label.txt", 'r') as f:
+        res = f.readlines()
+        res = np.array([ int(r[0]) for r in res ])
+        f.close()
+    res = (np.array(recog_res) == res).mean()
+    print(res)
+    # DEBUG
+    
+    recog_res = "\n".join([str(r) for r in recog_res])
+    manifold_dist = "\n".join([str(d) for d in manifold_dist])
+        
+    with open(os.path.join(basedir, "res.txt"), 'w') as f:
         f.writelines(recog_res)
         f.close()
         
-    with open(os.path.join(basedir, "dist.txt", 'w')) as f:
-        f.truncate()
+    with open(os.path.join(basedir, "dist.txt"), 'w') as f:
         f.writelines(manifold_dist)
         f.close()
         
@@ -112,16 +122,10 @@ if __name__ == '__main__':
     basedir = "results/" + datetime.now().strftime("%Y-%m-%d/%H-%M-%S") + f"_{ args.tag }"
     os.makedirs(basedir, exist_ok=True)
     
-    writer = tensorboardX.SummaryWriter(log_dir=basedir)
-    
-    recognet = RecogNet(args.H, args.W, len_embedding=256, backbone=args.backbone).to(args.device)
+    recognet = RecogNet(args.H, args.W, len_embedding=256, backbone=os.path.basename(args.checkpoint).split('_')[0]).to(args.device)
     threshold = load_ckpt(args.checkpoint, model=recognet, optimizer=None)
     
-    if not args.test:
-        pass
-    
-    else:
-        with torch.no_grad():
-            test_ds = Faces("data", args.batch_size, mode='test', lazy=args.lazy_load, preload_device='cuda', device='cuda')
-        test(args, basedir, recognet, test_ds, writer)
+    with torch.no_grad():
+        test_ds = Faces("data", args.batch_size, H=args.H, W=args.W, mode='test', lazy=args.lazy_load, device='cuda')
+    test(args, basedir, recognet, test_ds)
         

@@ -40,8 +40,6 @@ def tripair_based_forward(args, model, data, aug_warpper, self_flipper, loss_fn,
         faces_pos = aug_warpper(faces_pos)
         faces_neg = aug_warpper(faces_neg)
         
-        faces_anc, faces_pos, faces_neg = torch.clamp(faces_anc, 0, 1), torch.clamp(faces_pos, 0, 1), torch.clamp(faces_neg, 0, 1)
-    
     ft_anc = model(faces_anc)
     ft_pos = model(faces_pos)
     ft_neg = model(faces_neg)
@@ -61,9 +59,9 @@ def tripair_based_forward(args, model, data, aug_warpper, self_flipper, loss_fn,
     }
     if require_image:
         res['images'] = {
-            "train/image/anc": faces_anc[0].detach().cpu().numpy(),
-            "train/image/pos": faces_pos[0].detach().cpu().numpy(),
-            "train/image/neg": faces_neg[0].detach().cpu().numpy()
+            "train/image/anc": torch.clamp(faces_anc[0], 0, 1).detach().cpu().numpy(),
+            "train/image/pos": torch.clamp(faces_pos[0], 0, 1).detach().cpu().numpy(),
+            "train/image/neg": torch.clamp(faces_neg[0], 0, 1).detach().cpu().numpy()
         }
     return res
 
@@ -77,8 +75,8 @@ def pair_based_forward(args, model, data, aug_warpper, self_flipper, loss_fn, ma
         
         face_1[flip] = self_flipper(face_1[flip])
         
-        face_0 = torch.clamp(aug_warpper(face_0), 0., 1.)
-        face_1 = torch.clamp(aug_warpper(face_1), 0., 1.)
+        face_0 = aug_warpper(face_0)
+        face_1 = aug_warpper(face_1)
     
     fts_0, fts_1 = model(face_0), model(face_1)
     
@@ -102,8 +100,8 @@ def pair_based_forward(args, model, data, aug_warpper, self_flipper, loss_fn, ma
     
     if require_image:
         res['images'] = {
-            "train/image/face_0": face_0[0].detach().cpu().numpy(),
-            "train/image/face_1": face_1[0].detach().cpu().numpy(),
+            "train/image/face_0": torch.clamp(face_0[0], 0, 1).detach().cpu().numpy(),
+            "train/image/face_1": torch.clamp(face_1[0], 0, 1).detach().cpu().numpy(),
         }
     return res
 
@@ -116,7 +114,7 @@ def train(args, basedir, model, train_dataset, valid_dataset, frw_fn, loss_fn, w
     
     train_dl = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
     valid_dl = DataLoader(valid_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-3)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-2)
     # scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=10, T_mult=2, eta_min=0, last_epoch=-1)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-5)
     
@@ -125,7 +123,7 @@ def train(args, basedir, model, train_dataset, valid_dataset, frw_fn, loss_fn, w
         transforms.RandomApply([transforms.GaussianBlur(15, 1.0)], p=0.1),
         transforms.RandomAffine(degrees=10, scale=(0.95, 1.05), shear=5),
         transforms.RandomGrayscale(p=0.25),
-        transforms.RandomApply([transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, hue=0.1)], p=0.5),
+        transforms.RandomApply([transforms.ColorJitter(brightness=0.05, contrast=0.05, saturation=0.05, hue=0.)], p=0.5),
         # transforms.RandomErasing(scale=(0.02, 0.05)),
         transforms.Normalize(mean=(0.485, 0.456, 0.406), std=[0.2, 0.2, 0.2]),
     ])
@@ -166,7 +164,7 @@ def train(args, basedir, model, train_dataset, valid_dataset, frw_fn, loss_fn, w
                     writer.add_image(k, v, step)
             step += 1
             
-        if epoch % 5 == 0:
+        if epoch % 5 == 4:
             with torch.no_grad():
                 model.eval()
                 dists, thres, labels = [], [], []
@@ -175,7 +173,7 @@ def train(args, basedir, model, train_dataset, valid_dataset, frw_fn, loss_fn, w
                     faces_0, faces_1, label = data
                     
                     faces_0, faces_1 = faces_0.permute(0, 3, 1, 2), faces_1.permute(0, 3, 1, 2)
-                    faces_0, faces_1 = torch.clamp(norm_transforms(faces_0), 0., 1.), torch.clamp(norm_transforms(faces_1), 0., 1.)
+                    faces_0, faces_1 = norm_transforms(faces_0), norm_transforms(faces_1)
                     
                     ft_0, ft_1 = model(faces_0), model(faces_1)
                     
@@ -212,7 +210,7 @@ def train(args, basedir, model, train_dataset, valid_dataset, frw_fn, loss_fn, w
                 writer.add_scalar("valid/f_neg", fn, step)
                 tqdm.write(f"\tThreshold: {thres:.4f} (Optimal: {opt_thr:.4f}), Accuracy: {acc:.4f}, fn: {fn:.4f}, fp: {fp:.4f}")
         
-        if epoch % 50 == 9:
+        if epoch % 50 == 49:
             with torch.no_grad():
                 torch.save({
                     "args": args,
